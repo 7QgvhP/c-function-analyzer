@@ -4,6 +4,7 @@
 // テスト用のダミーグローバル変数
 int global_status = 0;
 int global_config_threshold = 100;
+int hoge[10];
 
 // テスト用のダミー関数
 void log_message(const char *msg) {
@@ -44,6 +45,19 @@ int process_sensor_data(int sensor_id, const char *sensor_name, int *out_status,
     // ポインタ引数への書き込み（出力変数）
     *out_value = calculated_val;
     *out_status = 0;
+    
+    for( int i = 0; i < 10; i++){
+        hoge[i] = i;
+    }
 
     return 0; // 戻り値
+}
+
+/**
+ * 配列引数とポインタ引数の検証用関数 (v1.2.1)
+ * この関数宣言の行にカーソルを置いて解析を実行します。
+ */
+void test_array_arg(int a[], int *b) {
+    a[5] = 10;
+    b[0] = 20;
 }

@@ -135,7 +135,8 @@ export function analyzeCFunction(tree: Parser.Tree, cursorLine: number): Analysi
                         // ポインタ宣言 (pointer_declarator) か判定しつつ名前を取得
                         let n = declNode;
                         while (n) {
-                            if (n.type === 'pointer_declarator') {
+                            // ポインタ宣言および配列宣言をポインタ（書き込み可能）として認識
+                            if (n.type === 'pointer_declarator' || n.type === 'array_declarator') {
                                 isPointer = true;
                             }
                             if (n.type === 'identifier') {
@@ -271,7 +272,8 @@ export function analyzeCFunction(tree: Parser.Tree, cursorLine: number): Analysi
     // 値渡しの引数、および書き込みが行われていないポインタ引数は「入力変数」
     // 書き込みが行われているポインタ引数は「出力変数」
     params.forEach(p => {
-        const fullType = p.type + (p.isPointer ? '*' : '');
+        // すでに型テキストの末尾に '*' がある場合は重ねて付与しない
+        const fullType = p.type.endsWith('*') ? p.type : (p.type + (p.isPointer ? '*' : ''));
         if (p.isPointer && pointerWrites.has(p.name)) {
             outputs.push({
                 name: p.name,
@@ -377,7 +379,25 @@ function checkLhsWrites(
             }
         }
     }
-    // 3. 単純な変数代入 (var = ...)
+    // 3. 配列要素への書き込み (array[index] = ...)
+    else if (node.type === 'subscript_expression') {
+        const argument = node.child(0) || node.childForFieldName('argument');
+        if (argument && argument.type === 'identifier') {
+            const name = argument.text;
+            const param = params.find(p => p.name === name);
+            if (param && param.isPointer) {
+                pointerWrites.add(name);
+            } else {
+                const isLocal = localVars.has(name);
+                const isParam = params.some(p => p.name === name);
+                // ローカル変数でも引数でもない場合のみグローバル変数とする
+                if (!isLocal && !isParam && !EXCLUDE_LIST.has(name)) {
+                    globalVarWrites.add(name);
+                }
+            }
+        }
+    }
+    // 4. 単純な変数代入 (var = ...)
     else if (node.type === 'identifier') {
         const name = node.text;
         const isParam = params.some(p => p.name === name);
@@ -397,6 +417,13 @@ function isLhsNode(node: Parser.SyntaxNode): boolean {
     let current = node;
     while (current.parent) {
         const parent = current.parent;
+        // 配列アクセス subscript_expression のインデックス部分にいる場合はLHSではない（読み取り）
+        if (parent.type === 'subscript_expression') {
+            const indexNode = parent.childForFieldName('index') || parent.child(2);
+            if (indexNode && (indexNode === current || isAncestor(indexNode, current))) {
+                return false;
+            }
+        }
         if (parent.type === 'assignment_expression') {
             const left = parent.childForFieldName('left') || parent.child(0);
             // 代入式の左辺ツリーの下にあるノードであれば Lhs
