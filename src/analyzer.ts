@@ -1,4 +1,4 @@
-import Parser from 'web-tree-sitter';
+import Parser = require('web-tree-sitter');
 
 // 解析結果を保持するインターフェース定義
 export interface VariableInfo {
@@ -54,8 +54,6 @@ export function analyzeCFunction(tree: Parser.Tree, cursorLine: number): Analysi
             const endRow = node.endPosition.row;
 
             if (cursorLine >= startRow && cursorLine <= endRow) {
-                // 関数宣言・シグネチャ部分（関数名や引数宣言があるノード）を特定
-                // C言語のASTでは、戻り値の型 (型宣言部) や declarator (関数名と引数リスト) になります
                 const declaratorNode = node.childForFieldName('declarator');
                 if (declaratorNode) {
                     const sigStartRow = node.startPosition.row; // 戻り値の型から開始

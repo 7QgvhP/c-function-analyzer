@@ -2,13 +2,16 @@
   "name": "function-analyzer",
   "displayName": "C Function Analyzer",
   "description": "C言語の選択された関数を簡易解析し、入出力変数や呼び出し関数を別ウィンドウに表示します。",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "antigravity",
   "engines": {
     "vscode": "^1.74.0"
   },
   "categories": [
     "Other"
+  ],
+  "activationEvents": [
+    "onCommand:function-analyzer.analyze"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -41,7 +44,7 @@
     "watch": "node scripts/copy-wasm.js && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:web-tree-sitter --format=cjs --platform=node --watch"
   },
   "dependencies": {
-    "web-tree-sitter": "^0.26.9"
+    "web-tree-sitter": "0.20.8"
   },
   "devDependencies": {
     "@types/node": "^18.11.18",

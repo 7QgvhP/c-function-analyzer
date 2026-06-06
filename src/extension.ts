@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import Parser from 'web-tree-sitter';
+import Parser = require('web-tree-sitter');
 import { analyzeCFunction } from './analyzer';
 import { FunctionAnalyzerWebview } from './webview';
 
@@ -71,7 +71,7 @@ export async function activate(context: vscode.ExtensionContext) {
             FunctionAnalyzerWebview.show(result);
 
         } catch (err) {
-            vscode.window.showErrorMessage('関数の解析中にエラーが発生しました: ' + err);
+            vscode.window.showErrorMessage('関数の解析中にエラーが発生しました。');
         }
     });
 
