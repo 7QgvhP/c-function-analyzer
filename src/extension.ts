@@ -8,7 +8,7 @@ import { FunctionAnalyzerWebview } from './webview';
  * 拡張機能がアクティベートされた際に実行されます。
  */
 export async function activate(context: vscode.ExtensionContext) {
-    console.log('Extension "function-analyzer" is now active.');
+    console.log('Extension "c-function-analyzer" is now active.');
 
     // 1. web-tree-sitter の初期化
     try {
@@ -34,8 +34,8 @@ export async function activate(context: vscode.ExtensionContext) {
         return;
     }
 
-    // 2. コマンド 'function-analyzer.analyze' の登録
-    const disposable = vscode.commands.registerCommand('function-analyzer.analyze', () => {
+    // 2. コマンド 'c-function-analyzer.analyze' の登録
+    const disposable = vscode.commands.registerCommand('c-function-analyzer.analyze', () => {
         const editor = vscode.window.activeTextEditor;
         if (!editor) {
             vscode.window.showWarningMessage('アクティブなエディタがありません。');
