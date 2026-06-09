@@ -1,8 +1,8 @@
 {
-  "name": "function-analyzer",
+  "name": "c-function-analyzer",
   "displayName": "C Function Analyzer",
   "description": "C言語の選択された関数を簡易解析し、入出力変数や呼び出し関数を別ウィンドウに表示します。",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "publisher": "antigravity",
   "engines": {
     "vscode": "^1.74.0"
@@ -11,19 +11,19 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:function-analyzer.analyze"
+    "onCommand:c-function-analyzer.analyze"
   ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "function-analyzer.analyze",
+        "command": "c-function-analyzer.analyze",
         "title": "関数を解析 (Analyze C Function)"
       }
     ],
     "keybindings": [
       {
-        "command": "function-analyzer.analyze",
+        "command": "c-function-analyzer.analyze",
         "key": "ctrl+alt+a",
         "when": "editorTextFocus && editorLangId == c"
       }
@@ -31,7 +31,7 @@
     "menus": {
       "editor/context": [
         {
-          "command": "function-analyzer.analyze",
+          "command": "c-function-analyzer.analyze",
           "when": "editorLangId == c",
           "group": "navigation"
         }
