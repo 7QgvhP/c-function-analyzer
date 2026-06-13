@@ -93,8 +93,10 @@ export class FunctionAnalyzerWebview {
                 return '<div class="no-data">関数呼び出しはありません</div>';
             }
             return funcs.map(f => `
-                <div class="function-item">
-                    <span class="function-name">${f}()</span>
+                <div class="variable-item">
+                    <div class="variable-row">
+                        <span class="variable-name">${f}()</span>
+                    </div>
                 </div>
             `).join('');
         };
@@ -215,21 +217,7 @@ export class FunctionAnalyzerWebview {
             margin-top: 2px;
         }
 
-        /* 呼び出し関数リスト */
-        .functions-list {
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-        }
 
-        .function-item {
-            padding: 6px 8px;
-            background-color: var(--bg-hover);
-            border-radius: 4px;
-            font-family: var(--vscode-editor-font-family, monospace);
-            font-size: 0.9rem;
-            align-self: flex-start;
-        }
 
         .no-data {
             color: var(--text-muted);
@@ -286,7 +274,7 @@ export class FunctionAnalyzerWebview {
         <!-- 呼び出し関数セクション -->
         <div class="section-container">
             <h2 class="section-title">呼び出し関数</h2>
-            <div class="functions-list">
+            <div class="variable-list">
                 ${renderCalledFunctions(result.calledFunctions)}
             </div>
         </div>
@@ -295,7 +283,7 @@ export class FunctionAnalyzerWebview {
         ${result.macroFunctions && result.macroFunctions.length > 0 ? `
         <div class="section-container">
             <h2 class="section-title">マクロ関数</h2>
-            <div class="functions-list">
+            <div class="variable-list">
                 ${renderCalledFunctions(result.macroFunctions)}
             </div>
         </div>
