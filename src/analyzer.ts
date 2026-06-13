@@ -18,6 +18,7 @@ export interface AnalysisResult {
     macroFunctions?: string[];
     startLine: number;
     endLine: number;
+    filePath?: string;
 }
 
 // 標準的なマクロや予約語など、グローバル変数判定から除外するブラックリスト

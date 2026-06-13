@@ -72,6 +72,7 @@ export async function activate(context: vscode.ExtensionContext) {
             }
 
             // Webview パネルを表示して解析結果を描画
+            result.filePath = document.uri.toString();
             FunctionAnalyzerWebview.show(result);
 
         } catch (err) {
