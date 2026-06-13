@@ -16,6 +16,8 @@ export interface AnalysisResult {
     calledFunctions: string[];
     macroVariables?: VariableInfo[];
     macroFunctions?: string[];
+    startLine: number;
+    endLine: number;
 }
 
 // 標準的なマクロや予約語など、グローバル変数判定から除外するブラックリスト
@@ -80,6 +82,9 @@ export function analyzeCFunction(
     }
 
     const funcNode = targetFunctionNode as Parser.SyntaxNode;
+
+    const startLine = funcNode.startPosition.row;
+    const endLine = funcNode.endPosition.row;
 
     // 2. 関数名と戻り値の型を抽出
     let functionName = 'unknown';
@@ -376,7 +381,9 @@ export function analyzeCFunction(
         internalVariables,
         calledFunctions: normalCalledFunctions,
         macroVariables,
-        macroFunctions
+        macroFunctions,
+        startLine,
+        endLine
     };
 }
 

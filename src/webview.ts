@@ -5,6 +5,7 @@ export class FunctionAnalyzerWebview {
     public static currentPanel: FunctionAnalyzerWebview | undefined;
     private readonly _panel: vscode.WebviewPanel;
     private _disposables: vscode.Disposable[] = [];
+    private _highlightDecorationType: vscode.TextEditorDecorationType | undefined;
 
     /**
      * Webview を表示するか、既存のパネルを更新します。
@@ -41,6 +42,27 @@ export class FunctionAnalyzerWebview {
         // パネルが破棄された時のクリーンアップ処理
         this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
 
+        // メッセージ受信時の処理
+        this._panel.webview.onDidReceiveMessage(
+            message => {
+                switch (message.command) {
+                    case 'highlightVariable':
+                        this._highlightVariableInEditor(message.name, result.startLine, result.endLine);
+                        break;
+                }
+            },
+            undefined,
+            this._disposables
+        );
+
+        // カーソル移動や選択変更があった場合にデコレーションをクリア
+        vscode.window.onDidChangeTextEditorSelection(() => {
+            if (this._highlightDecorationType) {
+                this._highlightDecorationType.dispose();
+                this._highlightDecorationType = undefined;
+            }
+        }, null, this._disposables);
+
         // 初回表示
         this.update(result);
     }
@@ -58,6 +80,9 @@ export class FunctionAnalyzerWebview {
      */
     public dispose() {
         FunctionAnalyzerWebview.currentPanel = undefined;
+        if (this._highlightDecorationType) {
+            this._highlightDecorationType.dispose();
+        }
         this._panel.dispose();
         while (this._disposables.length) {
             const x = this._disposables.pop();
@@ -187,6 +212,7 @@ export class FunctionAnalyzerWebview {
             display: flex;
             flex-direction: column;
             transition: background-color 0.15s ease;
+            cursor: pointer;
         }
 
         .variable-item:hover {
@@ -289,7 +315,74 @@ export class FunctionAnalyzerWebview {
         </div>
         ` : ''}
     </div>
+    <script>
+        const vscode = acquireVsCodeApi();
+        document.querySelectorAll('.variable-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const nameEl = item.querySelector('.variable-name');
+                if (nameEl) {
+                    let name = nameEl.textContent.trim();
+                    if (name.endsWith('()')) {
+                        name = name.slice(0, -2);
+                    }
+                    vscode.postMessage({
+                        command: 'highlightVariable',
+                        name: name
+                    });
+                }
+            });
+        });
+    </script>
 </body>
 </html>`;
+    }
+
+    /**
+     * エディタ上の対象関数内にある該当変数を強調表示します。
+     */
+    private _highlightVariableInEditor(name: string, startLine: number, endLine: number) {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+            return;
+        }
+
+        // 古いデコレーションがあれば破棄
+        if (this._highlightDecorationType) {
+            this._highlightDecorationType.dispose();
+        }
+
+        // テーマに合わせたハイライト色を使用
+        this._highlightDecorationType = vscode.window.createTextEditorDecorationType({
+            backgroundColor: new vscode.ThemeColor('editor.symbolHighlightBackground'),
+            border: '1px solid ' + new vscode.ThemeColor('editor.symbolHighlightBorder'),
+            borderRadius: '3px'
+        });
+
+        const doc = editor.document;
+        const ranges: vscode.Range[] = [];
+
+        // C言語の識別子として一致するもののみを検索 (単語境界 \b を使用)
+        const escapedName = name.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+        const regex = new RegExp(`\\b${escapedName}\\b`, 'g');
+
+        for (let lineNum = startLine; lineNum <= endLine; lineNum++) {
+            if (lineNum >= doc.lineCount) {
+                break;
+            }
+            const lineText = doc.lineAt(lineNum).text;
+            let match;
+            while ((match = regex.exec(lineText)) !== null) {
+                const startPos = new vscode.Position(lineNum, match.index);
+                const endPos = new vscode.Position(lineNum, match.index + name.length);
+                ranges.push(new vscode.Range(startPos, endPos));
+            }
+        }
+
+        editor.setDecorations(this._highlightDecorationType, ranges);
+
+        // 強調表示された最初の位置までスクロールする
+        if (ranges.length > 0) {
+            editor.revealRange(ranges[0], vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+        }
     }
 }
