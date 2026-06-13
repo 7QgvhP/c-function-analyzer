@@ -251,7 +251,7 @@ export class FunctionAnalyzerWebview {
     <div class="layout-grid">
         <!-- 入力変数セクション -->
         <div class="section-container">
-            <h2 class="section-title">入力変数 (Inputs)</h2>
+            <h2 class="section-title">入力変数</h2>
             <div class="variable-list">
                 ${renderVariableList(result.inputs)}
             </div>
@@ -259,7 +259,7 @@ export class FunctionAnalyzerWebview {
 
         <!-- 出力変数セクション -->
         <div class="section-container">
-            <h2 class="section-title">出力変数 (Outputs)</h2>
+            <h2 class="section-title">出力変数</h2>
             <div class="variable-list">
                 ${renderVariableList(result.outputs)}
             </div>
@@ -267,7 +267,7 @@ export class FunctionAnalyzerWebview {
 
         <!-- 内部（ローカル）変数セクション -->
         <div class="section-container">
-            <h2 class="section-title">内部変数 (Internal Variables)</h2>
+            <h2 class="section-title">内部変数</h2>
             <div class="variable-list">
                 ${renderVariableList(result.internalVariables)}
             </div>
@@ -276,30 +276,30 @@ export class FunctionAnalyzerWebview {
         <!-- マクロ変数セクション（該当がある場合のみ表示） -->
         ${result.macroVariables && result.macroVariables.length > 0 ? `
         <div class="section-container">
-            <h2 class="section-title">マクロ変数 (Macro Variables)</h2>
+            <h2 class="section-title">マクロ変数</h2>
             <div class="variable-list">
                 ${renderVariableList(result.macroVariables)}
             </div>
         </div>
         ` : ''}
 
+        <!-- 呼び出し関数セクション -->
+        <div class="section-container">
+            <h2 class="section-title">呼び出し関数</h2>
+            <div class="functions-list">
+                ${renderCalledFunctions(result.calledFunctions)}
+            </div>
+        </div>
+
         <!-- マクロ関数セクション（該当がある場合のみ表示） -->
         ${result.macroFunctions && result.macroFunctions.length > 0 ? `
         <div class="section-container">
-            <h2 class="section-title">マクロ関数 (Macro Functions)</h2>
+            <h2 class="section-title">マクロ関数</h2>
             <div class="functions-list">
                 ${renderCalledFunctions(result.macroFunctions)}
             </div>
         </div>
         ` : ''}
-
-        <!-- 呼び出し関数セクション -->
-        <div class="section-container">
-            <h2 class="section-title">呼び出し関数 (Called Functions)</h2>
-            <div class="functions-list">
-                ${renderCalledFunctions(result.calledFunctions)}
-            </div>
-        </div>
     </div>
 </body>
 </html>`;
