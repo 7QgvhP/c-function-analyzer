@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#define MAX_LIMIT 10
+
 // テスト用のダミーグローバル変数
 int global_status = 0;
 int global_config_threshold = 100;
