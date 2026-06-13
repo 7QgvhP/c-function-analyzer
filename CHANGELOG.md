@@ -2,6 +2,11 @@
 
 本プロジェクト（C Function Analyzer）のすべての変更は、このファイルに記録されます。
 
+## [1.3.0] - 2026-06-14
+### 追加
+* 変数名または関数名がすべて大文字のとき、通常の入出力や呼び出し関数とは別の分類として「マクロ変数 (Macro Variables)」および「マクロ関数 (Macro Functions)」のセクションに表示する機能を追加。
+* 上記の大文字マクロ分類機能のオン・オフを切り替える設定項目（`c-function-analyzer.classifyAllUppercaseAsMacros`）を VS Code 設定に追加。
+
 ## [1.2.0] - 2026-06-09
 ### 変更
 * プロジェクト内の識別子・コマンドID表記を `c-function-analyzer` に統一。

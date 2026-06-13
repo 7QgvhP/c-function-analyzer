@@ -56,8 +56,12 @@ export async function activate(context: vscode.ExtensionContext) {
             const sourceCode = document.getText();
             const tree = parser.parse(sourceCode);
 
+            // VS Codeの設定からマクロ分類オプションを取得
+            const config = vscode.workspace.getConfiguration('c-function-analyzer');
+            const classifyAllUppercaseAsMacros = config.get<boolean>('classifyAllUppercaseAsMacros', true);
+
             // C言語関数の簡易解析を実行
-            const result = analyzeCFunction(tree, cursorLine);
+            const result = analyzeCFunction(tree, cursorLine, classifyAllUppercaseAsMacros);
 
             if (!result) {
                 // 関数定義の関数名や引数宣言がある行以外で実行された場合はインフォメーションを表示

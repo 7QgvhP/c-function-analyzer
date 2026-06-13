@@ -14,6 +14,8 @@ export interface AnalysisResult {
     outputs: VariableInfo[];
     internalVariables: VariableInfo[];
     calledFunctions: string[];
+    macroVariables?: VariableInfo[];
+    macroFunctions?: string[];
 }
 
 // 標準的なマクロや予約語など、グローバル変数判定から除外するブラックリスト
@@ -41,7 +43,11 @@ function walk(node: Parser.SyntaxNode, callback: (node: Parser.SyntaxNode) => vo
  * @param cursorLine ユーザーがカーソルを置いている行（0始まり）
  * @returns 解析結果、またはカーソルが関数名部分にない場合は null
  */
-export function analyzeCFunction(tree: Parser.Tree, cursorLine: number): AnalysisResult | null {
+export function analyzeCFunction(
+    tree: Parser.Tree,
+    cursorLine: number,
+    classifyAllUppercaseAsMacros: boolean = true
+): AnalysisResult | null {
     const rootNode = tree.rootNode;
     let targetFunctionNode: Parser.SyntaxNode | null = null;
     let isCursorOnSignature = false;
@@ -183,30 +189,38 @@ export function analyzeCFunction(tree: Parser.Tree, cursorLine: number): Analysi
                     const typeText = typeNode.text;
                     
                     // 宣言されている識別子（変数名）をすべて取り出す（カンマ区切りの複数宣言に対応）
-                    walk(node, (n) => {
-                        // init_declarator や氏名などから identifier を探す
-                        if (n.type === 'init_declarator' || n.type === 'identifier') {
-                            let varName = '';
-                            let isPtr = false;
-                            
-                            let temp = n;
-                            while (temp) {
-                                if (temp.type === 'pointer_declarator') {
-                                    isPtr = true;
-                                }
-                                if (temp.type === 'identifier') {
-                                    varName = temp.text;
-                                    break;
-                                }
-                                temp = temp.childForFieldName('declarator') || temp.child(0)!;
-                            }
-                            
-                            if (varName && !localVars.has(varName)) {
-                                const fullType = typeText + (isPtr ? '*' : '');
-                                localVars.set(varName, fullType);
-                            }
+                    for (let i = 0; i < node.childCount; i++) {
+                        const child = node.child(i)!;
+                        if (child === typeNode || child.type === ',' || child.type === ';') {
+                            continue;
                         }
-                    });
+                        
+                        // init_declarator の場合は、その declarator フィールドのみを対象にする
+                        let decl = child;
+                        if (child.type === 'init_declarator') {
+                            decl = child.childForFieldName('declarator') || child.child(0)!;
+                        }
+
+                        let varName = '';
+                        let isPtr = false;
+                        
+                        let temp = decl;
+                        while (temp) {
+                            if (temp.type === 'pointer_declarator') {
+                                isPtr = true;
+                            }
+                            if (temp.type === 'identifier') {
+                                varName = temp.text;
+                                break;
+                            }
+                            temp = temp.childForFieldName('declarator') || temp.child(0)!;
+                        }
+                        
+                        if (varName && !localVars.has(varName)) {
+                            const fullType = typeText + (isPtr ? '*' : '');
+                            localVars.set(varName, fullType);
+                        }
+                    }
                 }
             }
 
@@ -268,6 +282,18 @@ export function analyzeCFunction(tree: Parser.Tree, cursorLine: number): Analysi
     // 5. 解析結果を inputs / outputs / internalVariables に分類・統合
     const inputs: VariableInfo[] = [];
     const outputs: VariableInfo[] = [];
+    const macroVariables: VariableInfo[] = [];
+    const macroFunctions: string[] = [];
+    const normalCalledFunctions: string[] = [];
+
+    // 呼び出し関数の大文字マクロ分類
+    calledFunctionsSet.forEach(func => {
+        if (classifyAllUppercaseAsMacros && isAllUppercase(func)) {
+            macroFunctions.push(func);
+        } else {
+            normalCalledFunctions.push(func);
+        }
+    });
 
     // 値渡しの引数、および書き込みが行われていないポインタ引数は「入力変数」
     // 書き込みが行われているポインタ引数は「出力変数」
@@ -302,21 +328,37 @@ export function analyzeCFunction(tree: Parser.Tree, cursorLine: number): Analysi
     // 書き込みが行われているものは「グローバル変数（出力）」
     // 読み取りが行われているものは「グローバル変数（入力）」
     globalVarWrites.forEach(name => {
-        outputs.push({
-            name,
-            type: 'extern/global (推定)',
-            details: 'グローバル変数への書き込み'
-        });
+        if (classifyAllUppercaseAsMacros && isAllUppercase(name)) {
+            macroVariables.push({
+                name,
+                type: 'macro (推定)',
+                details: 'マクロ変数への書き込み'
+            });
+        } else {
+            outputs.push({
+                name,
+                type: 'extern/global (推定)',
+                details: 'グローバル変数への書き込み'
+            });
+        }
     });
 
     globalVarReads.forEach(name => {
-        // 書き込み対象になっていないもののみを入力とする（両方の場合は両方に出すか、要件に合わせて今回はシンプルに分ける）
+        // 書き込み対象になっていないもののみを入力とする
         if (!globalVarWrites.has(name)) {
-            inputs.push({
-                name,
-                type: 'extern/global (推定)',
-                details: 'グローバル変数からの読み取り'
-            });
+            if (classifyAllUppercaseAsMacros && isAllUppercase(name)) {
+                macroVariables.push({
+                    name,
+                    type: 'macro (推定)',
+                    details: 'マクロ変数からの読み取り'
+                });
+            } else {
+                inputs.push({
+                    name,
+                    type: 'extern/global (推定)',
+                    details: 'グローバル変数からの読み取り'
+                });
+            }
         }
     });
 
@@ -332,7 +374,9 @@ export function analyzeCFunction(tree: Parser.Tree, cursorLine: number): Analysi
         inputs,
         outputs,
         internalVariables,
-        calledFunctions: Array.from(calledFunctionsSet)
+        calledFunctions: normalCalledFunctions,
+        macroVariables,
+        macroFunctions
     };
 }
 
@@ -451,4 +495,11 @@ function isAncestor(ancestor: Parser.SyntaxNode, descendant: Parser.SyntaxNode):
         curr = curr.parent;
     }
     return false;
+}
+
+/**
+ * 文字列がすべて大文字（英大文字、数字、アンダースコア）で構成されているか判定します。
+ */
+function isAllUppercase(str: string): boolean {
+    return /^[A-Z_][A-Z0-9_]*$/.test(str);
 }
