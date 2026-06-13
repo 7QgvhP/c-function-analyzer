@@ -61,3 +61,12 @@ void test_array_arg(int a[], int *b) {
     a[5] = 10;
     b[0] = 20;
 }
+
+/**
+ * 大文字マクロ分類の検証用関数 (v1.3.0)
+ * この関数宣言の行にカーソルを置いて解析を実行します。
+ */
+void test_macro_classification() {
+    int val = MAX_LIMIT;
+    LOG_MSG("Hello");
+}

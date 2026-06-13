@@ -273,6 +273,26 @@ export class FunctionAnalyzerWebview {
             </div>
         </div>
 
+        <!-- マクロ変数セクション（該当がある場合のみ表示） -->
+        ${result.macroVariables && result.macroVariables.length > 0 ? `
+        <div class="section-container">
+            <h2 class="section-title">マクロ変数 (Macro Variables)</h2>
+            <div class="variable-list">
+                ${renderVariableList(result.macroVariables)}
+            </div>
+        </div>
+        ` : ''}
+
+        <!-- マクロ関数セクション（該当がある場合のみ表示） -->
+        ${result.macroFunctions && result.macroFunctions.length > 0 ? `
+        <div class="section-container">
+            <h2 class="section-title">マクロ関数 (Macro Functions)</h2>
+            <div class="functions-list">
+                ${renderCalledFunctions(result.macroFunctions)}
+            </div>
+        </div>
+        ` : ''}
+
         <!-- 呼び出し関数セクション -->
         <div class="section-container">
             <h2 class="section-title">呼び出し関数 (Called Functions)</h2>
