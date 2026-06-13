@@ -47,7 +47,7 @@ export class FunctionAnalyzerWebview {
             message => {
                 switch (message.command) {
                     case 'highlightVariable':
-                        this._highlightVariableInEditor(message.name, result.startLine, result.endLine);
+                        this._highlightVariableInEditor(message.name, result.startLine, result.endLine, result.filePath);
                         break;
                 }
             },
@@ -56,10 +56,14 @@ export class FunctionAnalyzerWebview {
         );
 
         // カーソル移動や選択変更があった場合にデコレーションをクリア
-        vscode.window.onDidChangeTextEditorSelection(() => {
-            if (this._highlightDecorationType) {
-                this._highlightDecorationType.dispose();
-                this._highlightDecorationType = undefined;
+        vscode.window.onDidChangeTextEditorSelection(e => {
+            // キーボードやマウス操作による明示的な変更の場合のみハイライトを解除
+            if (e.kind === vscode.TextEditorSelectionChangeKind.Keyboard ||
+                e.kind === vscode.TextEditorSelectionChangeKind.Mouse) {
+                if (this._highlightDecorationType) {
+                    this._highlightDecorationType.dispose();
+                    this._highlightDecorationType = undefined;
+                }
             }
         }, null, this._disposables);
 
@@ -340,8 +344,15 @@ export class FunctionAnalyzerWebview {
     /**
      * エディタ上の対象関数内にある該当変数を強調表示します。
      */
-    private _highlightVariableInEditor(name: string, startLine: number, endLine: number) {
-        const editor = vscode.window.activeTextEditor;
+    private _highlightVariableInEditor(name: string, startLine: number, endLine: number, filePath?: string) {
+        let editor = vscode.window.activeTextEditor;
+        if (filePath) {
+            const found = vscode.window.visibleTextEditors.find(e => e.document.uri.toString() === filePath);
+            if (found) {
+                editor = found;
+            }
+        }
+
         if (!editor) {
             return;
         }
