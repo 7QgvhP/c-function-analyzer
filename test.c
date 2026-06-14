@@ -8,6 +8,13 @@ int global_status = 0;
 int global_config_threshold = 100;
 int hoge[10];
 
+struct hogestruct
+{
+    int a;
+    int b;
+};
+
+
 // テスト用のダミー関数
 void log_message(const char *msg) {
     printf("[LOG] %s\n", msg);
@@ -51,6 +58,9 @@ int process_sensor_data(int sensor_id, const char *sensor_name, int *out_status,
     for( int i = 0; i < 10; i++){
         hoge[i] = i;
     }
+
+    hogestruct.a = 100;
+    hogestruct.b = 200;
 
     return 0; // 戻り値
 }

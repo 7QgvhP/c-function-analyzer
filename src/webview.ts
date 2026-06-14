@@ -373,8 +373,9 @@ export class FunctionAnalyzerWebview {
         const ranges: vscode.Range[] = [];
 
         // C言語の識別子として一致するもののみを検索 (単語境界 \b を使用)
+        // 配列（[添字]）や構造体（.メンバ、->メンバ）への連続アクセスもあわせてマッチさせる
         const escapedName = name.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-        const regex = new RegExp(`\\b${escapedName}\\b`, 'g');
+        const regex = new RegExp(`\\b${escapedName}(?:\\.[a-zA-Z_][a-zA-Z0-9_]*|->[a-zA-Z_][a-zA-Z0-9_]*|\\[[^\\]]+\\])*\\b`, 'g');
 
         for (let lineNum = startLine; lineNum <= endLine; lineNum++) {
             if (lineNum >= doc.lineCount) {
@@ -384,7 +385,7 @@ export class FunctionAnalyzerWebview {
             let match;
             while ((match = regex.exec(lineText)) !== null) {
                 const startPos = new vscode.Position(lineNum, match.index);
-                const endPos = new vscode.Position(lineNum, match.index + name.length);
+                const endPos = new vscode.Position(lineNum, match.index + match[0].length);
                 ranges.push(new vscode.Range(startPos, endPos));
             }
         }
