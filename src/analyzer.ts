@@ -219,7 +219,21 @@ export function analyzeCFunction(
                                 varName = temp.text;
                                 break;
                             }
-                            temp = temp.childForFieldName('declarator') || temp.child(0)!;
+                            // 括弧付き宣言 (*var) の場合、中身の pointer_declarator などに進む
+                            if (temp.type === 'parenthesized_declarator') {
+                                temp = temp.childForFieldName('declarator') || temp.child(1)!;
+                            } 
+                            // 関数宣言 (引数リスト付き) の場合、関数名部分に進む
+                            else if (temp.type === 'function_declarator') {
+                                temp = temp.childForFieldName('declarator') || temp.child(0)!;
+                            }
+                            // 配列宣言の場合、配列名部分に進む
+                            else if (temp.type === 'array_declarator') {
+                                temp = temp.childForFieldName('declarator') || temp.child(0)!;
+                            }
+                            else {
+                                temp = temp.childForFieldName('declarator') || temp.child(0)!;
+                            }
                         }
                         
                         if (varName && !localVars.has(varName)) {
@@ -282,8 +296,17 @@ export function analyzeCFunction(
                     }
                 }
             }
-        });
-    }
+        }); // walk の閉じ括弧
+
+            // 呼び出し関数リストから、ローカル変数や引数として定義されている名前（関数ポインタなど）を除外
+            calledFunctionsSet.forEach(func => {
+                const isLocal = localVars.has(func);
+                const isParam = params.some(p => p.name === func);
+                if (isLocal || isParam) {
+                    calledFunctionsSet.delete(func);
+                }
+            });
+        }
 
     // 5. 解析結果を inputs / outputs / internalVariables に分類・統合
     const inputs: VariableInfo[] = [];
