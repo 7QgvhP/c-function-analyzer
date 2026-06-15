@@ -111,7 +111,6 @@ export class FunctionAnalyzerWebview {
                         <span class="variable-name">${v.name}</span>
                         <span class="variable-type">${v.type}</span>
                     </div>
-                    ${v.details ? `<div class="variable-details">${v.details}</div>` : ''}
                 </div>
             `).join('');
         };
@@ -138,122 +137,184 @@ export class FunctionAnalyzerWebview {
     <title>Function Analysis: ${result.functionName}</title>
     <style>
         :root {
-            --border-color: var(--vscode-panel-border, rgba(255, 255, 255, 0.1));
-            --accent-color: var(--vscode-textLink-foreground, #3794ff);
+            --border-color: var(--vscode-panel-border, rgba(255, 255, 255, 0.08));
             --text-muted: var(--vscode-descriptionForeground, #858585);
-            --bg-hover: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.05));
+            --bg-hover: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.04));
+            --card-bg: var(--vscode-editor-background, #1e1e1e);
+            --font-mono: var(--vscode-editor-font-family, Consolas, Monaco, monospace);
         }
 
         body {
-            font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             color: var(--vscode-editor-foreground, #cccccc);
             background-color: var(--vscode-editor-background, #1e1e1e);
             margin: 0;
             padding: 20px;
             box-sizing: border-box;
-            line-height: 1.5;
+            line-height: 1.6;
         }
 
         /* ヘッダーセクション */
         .header {
-            border-bottom: 1px solid var(--border-color);
-            padding-bottom: 14px;
             margin-bottom: 24px;
+            padding: 16px 20px;
+            background: rgba(255, 255, 255, 0.01);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
         }
 
         .header-meta {
-            font-size: 0.8rem;
+            font-size: 0.75rem;
+            font-weight: 700;
             text-transform: uppercase;
-            letter-spacing: 1.5px;
-            color: var(--text-muted);
-            margin-bottom: 4px;
+            letter-spacing: 2px;
+            color: var(--vscode-textLink-foreground, #3794ff);
+            margin-bottom: 6px;
         }
 
         .header-title {
-            font-size: 1.6rem;
+            font-size: 1.5rem;
             font-weight: 600;
             margin: 0;
             display: flex;
-            align-items: baseline;
+            align-items: center;
             gap: 12px;
             word-break: break-all;
             color: var(--vscode-editor-foreground, #ffffff);
         }
 
         .header-return-type {
-            font-size: 1rem;
-            font-weight: normal;
+            font-size: 0.95rem;
+            font-weight: 500;
             color: var(--text-muted);
-            font-family: var(--vscode-editor-font-family, monospace);
+            font-family: var(--font-mono);
+            background: rgba(255, 255, 255, 0.04);
+            padding: 2px 8px;
+            border-radius: 4px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
         }
 
         /* グリッドレイアウト */
         .layout-grid {
             display: flex;
             flex-direction: column;
-            gap: 24px;
+            gap: 20px;
         }
 
-        /* セクション */
+        /* セクション（カード） */
         .section-container {
-            margin-bottom: 12px;
+            background-color: rgba(255, 255, 255, 0.01);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 18px 20px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
         }
+        .section-container:hover {
+            border-color: rgba(255, 255, 255, 0.15);
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+        }
+
+        /* アクセント色定義 */
+        .section-container.input { --accent-color: #3794ff; }
+        .section-container.output { --accent-color: #2ecc71; }
+        .section-container.internal { --accent-color: #9b59b6; }
+        .section-container.macro-var { --accent-color: #e67e22; }
+        .section-container.called-fn { --accent-color: #1abc9c; }
+        .section-container.macro-fn { --accent-color: #f1c40f; }
 
         .section-title {
-            font-size: 1rem;
+            font-size: 0.95rem;
             font-weight: 600;
             margin-top: 0;
-            margin-bottom: 14px;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
             color: var(--vscode-editor-foreground, #ffffff);
-            border-bottom: 1px solid var(--border-color);
-            padding-bottom: 6px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            position: relative;
+        }
+        .section-title::after {
+            content: '';
+            position: absolute;
+            bottom: -1px;
+            left: 0;
+            width: 30px;
+            height: 2px;
+            background-color: var(--accent-color);
+            border-radius: 1px;
+        }
+
+        .section-title svg {
+            width: 16px;
+            height: 16px;
+            fill: var(--accent-color);
+            display: inline-block;
         }
 
         /* 変数行リスト */
-        .variable-item {
-            padding: 8px 6px;
-            border-bottom: 1px dashed var(--border-color);
+        .variable-list {
             display: flex;
             flex-direction: column;
-            transition: background-color 0.15s ease;
+            gap: 4px;
+        }
+
+        .variable-item {
+            padding: 8px 12px;
+            border-radius: 6px;
+            display: flex;
+            flex-direction: column;
+            transition: background-color 0.2s ease, transform 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
             cursor: pointer;
+            background-color: rgba(255, 255, 255, 0.005);
+            border: 1px solid transparent;
         }
 
         .variable-item:hover {
             background-color: var(--bg-hover);
+            border-color: rgba(255, 255, 255, 0.02);
+            transform: translateX(4px);
         }
 
         .variable-row {
             display: flex;
             justify-content: space-between;
-            align-items: baseline;
+            align-items: center;
         }
 
         .variable-name {
             font-weight: 600;
-            font-family: var(--vscode-editor-font-family, monospace);
-            font-size: 0.95rem;
+            font-family: var(--font-mono);
+            font-size: 0.9rem;
+            color: var(--vscode-editor-foreground, #ffffff);
         }
 
         .variable-type {
-            font-family: var(--vscode-editor-font-family, monospace);
+            font-family: var(--font-mono);
             color: var(--accent-color);
-            font-size: 0.85rem;
+            font-size: 0.75rem;
+            background: rgba(255, 255, 255, 0.03);
+            padding: 2px 6px;
+            border-radius: 4px;
+            border: 1px solid rgba(255, 255, 255, 0.04);
+            transition: background 0.2s ease;
         }
-
-        .variable-details {
-            font-size: 0.8rem;
-            color: var(--text-muted);
-            margin-top: 2px;
+        .variable-item:hover .variable-type {
+            background: rgba(255, 255, 255, 0.06);
         }
 
 
 
         .no-data {
             color: var(--text-muted);
-            font-style: italic;
-            font-size: 0.85rem;
-            padding: 8px 6px;
+            font-size: 0.8rem;
+            padding: 16px;
+            text-align: center;
+            background: rgba(255, 255, 255, 0.005);
+            border: 1px dashed var(--border-color);
+            border-radius: 6px;
         }
     </style>
 </head>
@@ -268,24 +329,30 @@ export class FunctionAnalyzerWebview {
 
     <div class="layout-grid">
         <!-- 入力変数セクション -->
-        <div class="section-container">
-            <h2 class="section-title">入力変数</h2>
+        <div class="section-container input">
+            <h2 class="section-title">
+                <span>入力変数</span>
+            </h2>
             <div class="variable-list">
                 ${renderVariableList(result.inputs)}
             </div>
         </div>
 
         <!-- 出力変数セクション -->
-        <div class="section-container">
-            <h2 class="section-title">出力変数</h2>
+        <div class="section-container output">
+            <h2 class="section-title">
+                <span>出力変数</span>
+            </h2>
             <div class="variable-list">
                 ${renderVariableList(result.outputs)}
             </div>
         </div>
 
         <!-- 内部（ローカル）変数セクション -->
-        <div class="section-container">
-            <h2 class="section-title">内部変数</h2>
+        <div class="section-container internal">
+            <h2 class="section-title">
+                <span>内部変数</span>
+            </h2>
             <div class="variable-list">
                 ${renderVariableList(result.internalVariables)}
             </div>
@@ -293,8 +360,10 @@ export class FunctionAnalyzerWebview {
 
         <!-- マクロ変数セクション（該当がある場合のみ表示） -->
         ${result.macroVariables && result.macroVariables.length > 0 ? `
-        <div class="section-container">
-            <h2 class="section-title">マクロ変数</h2>
+        <div class="section-container macro-var">
+            <h2 class="section-title">
+                <span>マクロ変数</span>
+            </h2>
             <div class="variable-list">
                 ${renderVariableList(result.macroVariables)}
             </div>
@@ -302,8 +371,10 @@ export class FunctionAnalyzerWebview {
         ` : ''}
 
         <!-- 呼び出し関数セクション -->
-        <div class="section-container">
-            <h2 class="section-title">呼び出し関数</h2>
+        <div class="section-container called-fn">
+            <h2 class="section-title">
+                <span>呼び出し関数</span>
+            </h2>
             <div class="variable-list">
                 ${renderCalledFunctions(result.calledFunctions)}
             </div>
@@ -311,8 +382,10 @@ export class FunctionAnalyzerWebview {
 
         <!-- マクロ関数セクション（該当がある場合のみ表示） -->
         ${result.macroFunctions && result.macroFunctions.length > 0 ? `
-        <div class="section-container">
-            <h2 class="section-title">マクロ関数</h2>
+        <div class="section-container macro-fn">
+            <h2 class="section-title">
+                <span>マクロ関数</span>
+            </h2>
             <div class="variable-list">
                 ${renderCalledFunctions(result.macroFunctions)}
             </div>
