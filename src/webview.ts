@@ -51,6 +51,9 @@ export class FunctionAnalyzerWebview {
                     case 'highlightVariable':
                         this._highlightVariableInEditor(message.name, this._result.startLine, this._result.endLine, this._result.filePath);
                         break;
+                    case 'copyText':
+                        vscode.env.clipboard.writeText(message.text);
+                        break;
                 }
             },
             undefined,
@@ -501,18 +504,17 @@ export class FunctionAnalyzerWebview {
                 });
             }
             
-            try {
-                await navigator.clipboard.writeText(text);
-                const originalText = button.textContent;
-                button.textContent = "コピー完了";
-                button.classList.add('copied');
-                setTimeout(() => {
-                    button.textContent = originalText;
-                    button.classList.remove('copied');
-                }, 1500);
-            } catch (err) {
-                console.error('コピーに失敗しました:', err);
-            }
+            vscode.postMessage({
+                command: 'copyText',
+                text: text
+            });
+            const originalText = button.textContent;
+            button.textContent = "コピー完了";
+            button.classList.add('copied');
+            setTimeout(() => {
+                button.textContent = originalText;
+                button.classList.remove('copied');
+            }, 1500);
         }
     </script>
 </body>
