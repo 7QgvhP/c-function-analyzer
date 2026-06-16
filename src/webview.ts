@@ -233,6 +233,7 @@ export class FunctionAnalyzerWebview {
             margin-bottom: 16px;
             display: flex;
             align-items: center;
+            justify-content: space-between;
             gap: 10px;
             color: var(--vscode-editor-foreground, #ffffff);
             padding-bottom: 10px;
@@ -250,11 +251,15 @@ export class FunctionAnalyzerWebview {
             border-radius: 1px;
         }
 
-        .section-title svg {
-            width: 16px;
-            height: 16px;
-            fill: var(--accent-color);
-            display: inline-block;
+        .section-count {
+            font-size: 0.75rem;
+            font-weight: 600;
+            background: rgba(255, 255, 255, 0.06);
+            color: var(--accent-color);
+            padding: 2px 8px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.04);
+            font-family: var(--font-mono);
         }
 
         /* 変数行リスト */
@@ -335,6 +340,7 @@ export class FunctionAnalyzerWebview {
         <div class="section-container input">
             <h2 class="section-title">
                 <span>入力変数</span>
+                <span class="section-count">${result.inputs.length}</span>
             </h2>
             <div class="variable-list">
                 ${renderVariableList(result.inputs)}
@@ -345,6 +351,7 @@ export class FunctionAnalyzerWebview {
         <div class="section-container output">
             <h2 class="section-title">
                 <span>出力変数</span>
+                <span class="section-count">${result.outputs.length}</span>
             </h2>
             <div class="variable-list">
                 ${renderVariableList(result.outputs)}
@@ -355,6 +362,7 @@ export class FunctionAnalyzerWebview {
         <div class="section-container internal">
             <h2 class="section-title">
                 <span>内部変数</span>
+                <span class="section-count">${result.internalVariables.length}</span>
             </h2>
             <div class="variable-list">
                 ${renderVariableList(result.internalVariables)}
@@ -366,6 +374,7 @@ export class FunctionAnalyzerWebview {
         <div class="section-container macro-var">
             <h2 class="section-title">
                 <span>マクロ変数</span>
+                <span class="section-count">${result.macroVariables.length}</span>
             </h2>
             <div class="variable-list">
                 ${renderVariableList(result.macroVariables)}
@@ -377,6 +386,7 @@ export class FunctionAnalyzerWebview {
         <div class="section-container called-fn">
             <h2 class="section-title">
                 <span>呼び出し関数</span>
+                <span class="section-count">${result.calledFunctions.length}</span>
             </h2>
             <div class="variable-list">
                 ${renderCalledFunctions(result.calledFunctions)}
@@ -388,6 +398,7 @@ export class FunctionAnalyzerWebview {
         <div class="section-container macro-fn">
             <h2 class="section-title">
                 <span>マクロ関数</span>
+                <span class="section-count">${result.macroFunctions.length}</span>
             </h2>
             <div class="variable-list">
                 ${renderCalledFunctions(result.macroFunctions)}
