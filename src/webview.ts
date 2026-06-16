@@ -262,6 +262,35 @@ export class FunctionAnalyzerWebview {
             font-family: var(--font-mono);
         }
 
+        .section-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .copy-button {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            color: var(--text-muted);
+            padding: 2px 8px;
+            font-size: 0.7rem;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .copy-button:hover {
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--vscode-editor-foreground, #ffffff);
+            border-color: rgba(255, 255, 255, 0.15);
+        }
+
+        .copy-button.copied {
+            background: var(--vscode-button-background, #007acc);
+            color: var(--vscode-button-foreground, #ffffff);
+            border-color: transparent;
+        }
+
         /* 変数行リスト */
         .variable-list {
             display: flex;
@@ -339,8 +368,11 @@ export class FunctionAnalyzerWebview {
         <!-- 入力変数セクション -->
         <div class="section-container input">
             <h2 class="section-title">
-                <span>入力変数</span>
-                <span class="section-count">${result.inputs.length}</span>
+                <span class="section-title-text">入力変数</span>
+                <div class="section-actions">
+                    <button class="copy-button" onclick="copySectionText(this)">コピー</button>
+                    <span class="section-count">${result.inputs.length}</span>
+                </div>
             </h2>
             <div class="variable-list">
                 ${renderVariableList(result.inputs)}
@@ -350,8 +382,11 @@ export class FunctionAnalyzerWebview {
         <!-- 出力変数セクション -->
         <div class="section-container output">
             <h2 class="section-title">
-                <span>出力変数</span>
-                <span class="section-count">${result.outputs.length}</span>
+                <span class="section-title-text">出力変数</span>
+                <div class="section-actions">
+                    <button class="copy-button" onclick="copySectionText(this)">コピー</button>
+                    <span class="section-count">${result.outputs.length}</span>
+                </div>
             </h2>
             <div class="variable-list">
                 ${renderVariableList(result.outputs)}
@@ -361,8 +396,11 @@ export class FunctionAnalyzerWebview {
         <!-- 内部（ローカル）変数セクション -->
         <div class="section-container internal">
             <h2 class="section-title">
-                <span>内部変数</span>
-                <span class="section-count">${result.internalVariables.length}</span>
+                <span class="section-title-text">内部変数</span>
+                <div class="section-actions">
+                    <button class="copy-button" onclick="copySectionText(this)">コピー</button>
+                    <span class="section-count">${result.internalVariables.length}</span>
+                </div>
             </h2>
             <div class="variable-list">
                 ${renderVariableList(result.internalVariables)}
@@ -373,8 +411,11 @@ export class FunctionAnalyzerWebview {
         ${result.macroVariables && result.macroVariables.length > 0 ? `
         <div class="section-container macro-var">
             <h2 class="section-title">
-                <span>マクロ変数</span>
-                <span class="section-count">${result.macroVariables.length}</span>
+                <span class="section-title-text">マクロ変数</span>
+                <div class="section-actions">
+                    <button class="copy-button" onclick="copySectionText(this)">コピー</button>
+                    <span class="section-count">${result.macroVariables.length}</span>
+                </div>
             </h2>
             <div class="variable-list">
                 ${renderVariableList(result.macroVariables)}
@@ -385,8 +426,11 @@ export class FunctionAnalyzerWebview {
         <!-- 呼び出し関数セクション -->
         <div class="section-container called-fn">
             <h2 class="section-title">
-                <span>呼び出し関数</span>
-                <span class="section-count">${result.calledFunctions.length}</span>
+                <span class="section-title-text">呼び出し関数</span>
+                <div class="section-actions">
+                    <button class="copy-button" onclick="copySectionText(this)">コピー</button>
+                    <span class="section-count">${result.calledFunctions.length}</span>
+                </div>
             </h2>
             <div class="variable-list">
                 ${renderCalledFunctions(result.calledFunctions)}
@@ -397,8 +441,11 @@ export class FunctionAnalyzerWebview {
         ${result.macroFunctions && result.macroFunctions.length > 0 ? `
         <div class="section-container macro-fn">
             <h2 class="section-title">
-                <span>マクロ関数</span>
-                <span class="section-count">${result.macroFunctions.length}</span>
+                <span class="section-title-text">マクロ関数</span>
+                <div class="section-actions">
+                    <button class="copy-button" onclick="copySectionText(this)">コピー</button>
+                    <span class="section-count">${result.macroFunctions.length}</span>
+                </div>
             </h2>
             <div class="variable-list">
                 ${renderCalledFunctions(result.macroFunctions)}
@@ -423,6 +470,50 @@ export class FunctionAnalyzerWebview {
                 }
             });
         });
+
+        async function copySectionText(button) {
+            const container = button.closest('.section-container');
+            const titleEl = container.querySelector('.section-title-text');
+            const title = titleEl ? titleEl.textContent.trim() : '変数リスト';
+            const items = container.querySelectorAll('.variable-item');
+            
+            let text = "■ " + title + "\n";
+            let hasData = false;
+            
+            if (items.length > 0) {
+                const firstItem = items[0];
+                if (!firstItem.classList.contains('no-data')) {
+                    hasData = true;
+                }
+            }
+            
+            if (!hasData) {
+                text += "(データなし)\n";
+            } else {
+                items.forEach(item => {
+                    const nameEl = item.querySelector('.variable-name');
+                    const typeEl = item.querySelector('.variable-type');
+                    if (nameEl) {
+                        const name = nameEl.textContent.trim();
+                        const type = typeEl ? " (" + typeEl.textContent.trim() + ")" : "";
+                        text += "- " + name + type + "\n";
+                    }
+                });
+            }
+            
+            try {
+                await navigator.clipboard.writeText(text);
+                const originalText = button.textContent;
+                button.textContent = "コピー完了";
+                button.classList.add('copied');
+                setTimeout(() => {
+                    button.textContent = originalText;
+                    button.classList.remove('copied');
+                }, 1500);
+            } catch (err) {
+                console.error('コピーに失敗しました:', err);
+            }
+        }
     </script>
 </body>
 </html>`;
