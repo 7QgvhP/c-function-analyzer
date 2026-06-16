@@ -6,6 +6,7 @@ export class FunctionAnalyzerWebview {
     private readonly _panel: vscode.WebviewPanel;
     private _disposables: vscode.Disposable[] = [];
     private _highlightDecorationType: vscode.TextEditorDecorationType | undefined;
+    private _result: AnalysisResult;
 
     /**
      * Webview を表示するか、既存のパネルを更新します。
@@ -38,6 +39,7 @@ export class FunctionAnalyzerWebview {
 
     private constructor(panel: vscode.WebviewPanel, result: AnalysisResult) {
         this._panel = panel;
+        this._result = result;
 
         // パネルが破棄された時のクリーンアップ処理
         this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
@@ -47,7 +49,7 @@ export class FunctionAnalyzerWebview {
             message => {
                 switch (message.command) {
                     case 'highlightVariable':
-                        this._highlightVariableInEditor(message.name, result.startLine, result.endLine, result.filePath);
+                        this._highlightVariableInEditor(message.name, this._result.startLine, this._result.endLine, this._result.filePath);
                         break;
                 }
             },
@@ -75,6 +77,7 @@ export class FunctionAnalyzerWebview {
      * 解析結果で Webview の中身を更新します。
      */
     public update(result: AnalysisResult) {
+        this._result = result;
         this._panel.title = `Analysis: ${result.functionName}`;
         this._panel.webview.html = this._getHtmlForWebview(result);
     }
@@ -241,7 +244,7 @@ export class FunctionAnalyzerWebview {
             position: absolute;
             bottom: -1px;
             left: 0;
-            width: 30px;
+            width: 100%;
             height: 2px;
             background-color: var(--accent-color);
             border-radius: 1px;
