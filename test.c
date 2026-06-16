@@ -62,6 +62,8 @@ int process_sensor_data(int sensor_id, const char *sensor_name, int *out_status,
     hogestruct.a = 100;
     hogestruct.b = 200;
 
+    calculated_val = hogestruct.a;
+
     return 0; // 戻り値
 }
 
@@ -72,6 +74,7 @@ int process_sensor_data(int sensor_id, const char *sensor_name, int *out_status,
 void test_array_arg(int a[], int *b) {
     a[5] = 10;
     b[0] = 20;
+    hoge[0] = 50;
 }
 
 /**

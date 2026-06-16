@@ -184,6 +184,9 @@ export function analyzeCFunction(
     
     // ポインタ引数の書き込み状況を追跡する
     const pointerWrites = new Set<string>();
+    
+    // ポインタ引数の読み取り状況を追跡する
+    const pointerReads = new Set<string>();
 
     if (bodyNode) {
         // ボディ内のノードをトラバース
@@ -282,8 +285,16 @@ export function analyzeCFunction(
                 }
 
                 if (!isFieldOrDeclaration) {
+                    // ポインタ引数の読み取りをチェック
+                    const targetParam = params.find(p => p.name === name);
+                    if (targetParam && targetParam.isPointer) {
+                        if (!isLhsNode(node)) {
+                            pointerReads.add(name);
+                        }
+                    }
+
                     // 引数、ローカル変数、呼び出し関数、ブラックリストのいずれにも属さない場合
-                    const isParam = params.some(p => p.name === name);
+                    const isParam = targetParam !== undefined;
                     const isLocal = localVars.has(name);
                     const isCall = calledFunctionsSet.has(name);
                     
@@ -324,22 +335,43 @@ export function analyzeCFunction(
         }
     });
 
-    // 値渡しの引数、および書き込みが行われていないポインタ引数は「入力変数」
+    // 値渡しの引数、および読み取りが行われているポインタ引数は「入力変数」
     // 書き込みが行われているポインタ引数は「出力変数」
     params.forEach(p => {
         // すでに型テキストの末尾に '*' がある場合は重ねて付与しない
         const fullType = p.type.endsWith('*') ? p.type : (p.type + (p.isPointer ? '*' : ''));
-        if (p.isPointer && pointerWrites.has(p.name)) {
+        
+        let isInput = false;
+        let isOutput = false;
+
+        if (p.isPointer) {
+            if (pointerWrites.has(p.name)) {
+                isOutput = true;
+            }
+            if (pointerReads.has(p.name)) {
+                isInput = true;
+            }
+            // どちらも検出されなかった場合のセーフティガード（ポインタ引数としての存在）
+            if (!isInput && !isOutput) {
+                isInput = true;
+            }
+        } else {
+            // 値渡し引数は常に入力
+            isInput = true;
+        }
+
+        if (isInput) {
+            inputs.push({
+                name: p.name,
+                type: fullType,
+                details: p.isPointer ? '入力引数（ポインタ読み取りあり）' : '入力引数（値渡し）'
+            });
+        }
+        if (isOutput) {
             outputs.push({
                 name: p.name,
                 type: fullType,
                 details: '出力引数（ポインタ書き込みあり）'
-            });
-        } else {
-            inputs.push({
-                name: p.name,
-                type: fullType,
-                details: p.isPointer ? '入力引数（読み取り専用ポインタ）' : '入力引数（値渡し）'
             });
         }
     });
@@ -373,21 +405,19 @@ export function analyzeCFunction(
     });
 
     globalVarReads.forEach(name => {
-        // 書き込み対象になっていないもののみを入力とする
-        if (!globalVarWrites.has(name)) {
-            if (classifyAllUppercaseAsMacros && isAllUppercase(name)) {
-                macroVariables.push({
-                    name,
-                    type: 'macro (推定)',
-                    details: 'マクロ変数からの読み取り'
-                });
-            } else {
-                inputs.push({
-                    name,
-                    type: 'extern/global (推定)',
-                    details: 'グローバル変数からの読み取り'
-                });
-            }
+        // 制限を解除し、読み取りがあれば常に入力（Inputs）に分類する
+        if (classifyAllUppercaseAsMacros && isAllUppercase(name)) {
+            macroVariables.push({
+                name,
+                type: 'macro (推定)',
+                details: 'マクロ変数からの読み取り'
+            });
+        } else {
+            inputs.push({
+                name,
+                type: 'extern/global (推定)',
+                details: 'グローバル変数からの読み取り'
+            });
         }
     });
 
