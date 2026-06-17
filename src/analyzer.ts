@@ -398,7 +398,7 @@ export function analyzeCFunction(
         } else {
             outputs.push({
                 name,
-                type: 'extern/global (推定)',
+                type: 'global (推定)',
                 details: 'グローバル変数への書き込み'
             });
         }
@@ -415,7 +415,7 @@ export function analyzeCFunction(
         } else {
             inputs.push({
                 name,
-                type: 'extern/global (推定)',
+                type: 'global (推定)',
                 details: 'グローバル変数からの読み取り'
             });
         }
