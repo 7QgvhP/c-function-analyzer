@@ -525,14 +525,14 @@ function isLhsNode(node: Parser.SyntaxNode): boolean {
         // 配列アクセス subscript_expression のインデックス部分にいる場合はLHSではない（読み取り）
         if (parent.type === 'subscript_expression') {
             const indexNode = parent.childForFieldName('index') || parent.child(2);
-            if (indexNode && (indexNode === current || isAncestor(indexNode, current))) {
+            if (indexNode && (indexNode.id === current.id || isAncestor(indexNode, current))) {
                 return false;
             }
         }
         if (parent.type === 'assignment_expression') {
             const left = parent.childForFieldName('left') || parent.child(0);
             // 代入式の左辺ツリーの下にあるノードであれば Lhs
-            if (left && (left === current || isAncestor(left, current))) {
+            if (left && (left.id === current.id || isAncestor(left, current))) {
                 return true;
             }
         }
@@ -550,7 +550,7 @@ function isLhsNode(node: Parser.SyntaxNode): boolean {
 function isAncestor(ancestor: Parser.SyntaxNode, descendant: Parser.SyntaxNode): boolean {
     let curr: Parser.SyntaxNode | null = descendant;
     while (curr) {
-        if (curr === ancestor) {
+        if (curr.id === ancestor.id) {
             return true;
         }
         curr = curr.parent;
