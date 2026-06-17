@@ -115,8 +115,8 @@ export class FunctionAnalyzerWebview {
                 <div class="variable-item" data-name="${v.name}">
                     <div class="variable-row">
                         <div class="variable-info">
-                            <span class="variable-name">${v.name}</span>
                             <span class="variable-type">${v.type}</span>
+                            <span class="variable-name">${v.name}</span>
                         </div>
                         <button class="var-copy-button" data-name="${v.name}">コピー</button>
                     </div>
@@ -326,6 +326,12 @@ export class FunctionAnalyzerWebview {
             border-radius: 4px;
             border: 1px solid rgba(255, 255, 255, 0.04);
             transition: background 0.2s ease;
+            flex: 0 0 140px;
+            box-sizing: border-box;
+            text-align: center;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
         .variable-item:hover .variable-type {
             background: rgba(255, 255, 255, 0.06);
