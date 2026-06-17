@@ -6,6 +6,7 @@
 // テスト用のダミーグローバル変数
 int global_status = 0;
 int global_config_threshold = 100;
+int output_val;
 int hoge[10];
 
 struct hogestruct
@@ -63,6 +64,8 @@ int process_sensor_data(int sensor_id, const char *sensor_name, int *out_status,
     hogestruct.b = 200;
 
     calculated_val = hogestruct.a;
+
+    output_val = 100;
 
     return 0; // 戻り値
 }
