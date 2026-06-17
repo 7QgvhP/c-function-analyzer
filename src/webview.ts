@@ -384,7 +384,6 @@ export class FunctionAnalyzerWebview {
         <div class="header-meta">C Function Analysis</div>
         <h1 class="header-title">
             <span>${result.functionName}</span>
-            <span class="header-return-type">${result.returnType}</span>
         </h1>
     </div>
 
