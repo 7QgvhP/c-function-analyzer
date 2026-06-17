@@ -63,7 +63,7 @@ int process_sensor_data(int sensor_id, const char *sensor_name, int *out_status,
     hogestruct.a = 100;
     hogestruct.b = 200;
 
-    calculated_val = hogestruct.a;
+    // calculated_val = hogestruct.a;
 
     output_val = 100;
 

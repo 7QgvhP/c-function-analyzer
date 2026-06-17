@@ -52,6 +52,61 @@ export function analyzeCFunction(
     classifyAllUppercaseAsMacros: boolean = true
 ): AnalysisResult | null {
     const rootNode = tree.rootNode;
+
+    // ファイル直下の変数宣言をスキャンして型情報を収集
+    const fileScopeVars = new Map<string, string>();
+    rootNode.children.forEach(node => {
+        if (node.type === 'declaration') {
+            const typeNode = node.childForFieldName('type') || node.child(0);
+            if (typeNode) {
+                const typeText = typeNode.text;
+                for (let i = 0; i < node.childCount; i++) {
+                    const child = node.child(i)!;
+                    if (child === typeNode || child.type === ',' || child.type === ';') {
+                        continue;
+                    }
+                    
+                    let decl = child;
+                    if (child.type === 'init_declarator') {
+                        decl = child.childForFieldName('declarator') || child.child(0)!;
+                    }
+
+                    if (decl.type === 'function_declarator') {
+                        continue;
+                    }
+
+                    let varName = '';
+                    let isPtr = false;
+                    
+                    let temp = decl;
+                    while (temp) {
+                        if (temp.type === 'pointer_declarator') {
+                            isPtr = true;
+                        }
+                        if (temp.type === 'identifier') {
+                            varName = temp.text;
+                            break;
+                        }
+                        if (temp.type === 'parenthesized_declarator') {
+                            temp = temp.childForFieldName('declarator') || temp.child(1)!;
+                        } 
+                        else if (temp.type === 'array_declarator') {
+                            temp = temp.childForFieldName('declarator') || temp.child(0)!;
+                        }
+                        else {
+                            temp = temp.childForFieldName('declarator') || temp.child(0)!;
+                        }
+                    }
+                    
+                    if (varName && decl.type !== 'function_declarator') {
+                        const fullType = typeText + (isPtr ? '*' : '');
+                        fileScopeVars.set(varName, fullType);
+                    }
+                }
+            }
+        }
+    });
+
     let targetFunctionNode: Parser.SyntaxNode | null = null;
     let isCursorOnSignature = false;
 
@@ -396,9 +451,10 @@ export function analyzeCFunction(
                 details: 'マクロ変数への書き込み'
             });
         } else {
+            const fileVarType = fileScopeVars.get(name);
             outputs.push({
                 name,
-                type: 'global (推定)',
+                type: fileVarType || 'global (推定)',
                 details: 'グローバル変数への書き込み'
             });
         }
@@ -413,9 +469,10 @@ export function analyzeCFunction(
                 details: 'マクロ変数からの読み取り'
             });
         } else {
+            const fileVarType = fileScopeVars.get(name);
             inputs.push({
                 name,
-                type: 'global (推定)',
+                type: fileVarType || 'global (推定)',
                 details: 'グローバル変数からの読み取り'
             });
         }
