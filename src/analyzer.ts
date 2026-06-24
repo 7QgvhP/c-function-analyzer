@@ -146,11 +146,19 @@ export function analyzeCFunction(
     let functionName = 'unknown';
     let returnType = 'void';
 
+    let ptrCount = 0;
     const declaratorNode = funcNode.childForFieldName('declarator');
     if (declaratorNode) {
-        // 関数名を取得（関数宣言ノードから名前を表す識別子を見つける）
+        // 関数名を取得しつつ、戻り値のポインタ深さ（アスタリスク数）をカウント
         let nameNode = declaratorNode;
-        while (nameNode && nameNode.type !== 'identifier') {
+        while (nameNode) {
+            if (nameNode.type === 'pointer_declarator') {
+                ptrCount++;
+            }
+            if (nameNode.type === 'identifier') {
+                functionName = nameNode.text;
+                break;
+            }
             // pointer_declarator や function_declarator の中を探索
             const childDeclarator = nameNode.childForFieldName('declarator') || nameNode.child(0);
             if (childDeclarator) {
@@ -158,9 +166,6 @@ export function analyzeCFunction(
             } else {
                 break;
             }
-        }
-        if (nameNode && nameNode.type === 'identifier') {
-            functionName = nameNode.text;
         }
     }
 
@@ -170,9 +175,11 @@ export function analyzeCFunction(
         // 例: "int", "static void", "struct Data*" など
         // declaratorの手前までのテキストを結合して戻り値とする
         const declStart = declaratorNode ? declaratorNode.startIndex : funcNode.endIndex;
-        returnType = funcNode.text.substring(0, declStart - funcNode.startIndex).trim();
+        let rawType = funcNode.text.substring(0, declStart - funcNode.startIndex).trim();
         // 改行や余分な空白を除去
-        returnType = returnType.replace(/\s+/g, ' ');
+        rawType = rawType.replace(/\s+/g, ' ');
+        // ポインタのアスタリスクを型名の末尾に追加
+        returnType = rawType + '*'.repeat(ptrCount);
     }
 
     // 3. 引数の抽出
@@ -432,7 +439,8 @@ export function analyzeCFunction(
     });
 
     // 戻り値がある場合は、出力変数リストに追加
-    if (returnType !== 'void') {
+    const cleanReturnType = returnType.replace(/\b(static|extern|inline)\b/g, '').trim();
+    if (cleanReturnType !== 'void') {
         outputs.push({
             name: '戻り値 (return)',
             type: returnType,

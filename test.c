@@ -17,7 +17,7 @@ struct hogestruct
 
 
 // テスト用のダミー関数
-void log_message(const char *msg) {
+static void log_message(const char *msg) {
     printf("[LOG] %s\n", msg);
 }
 
