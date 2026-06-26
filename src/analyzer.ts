@@ -59,7 +59,11 @@ export function analyzeCFunction(
         if (node.type === 'declaration') {
             const typeNode = node.childForFieldName('type') || node.child(0);
             if (typeNode) {
-                const typeText = typeNode.text;
+                let typeText = typeNode.text.trim();
+                // 構造体のインライン定義（struct X { ... }）がある場合、{ より手前の定義部分のみを取り出す
+                if (typeText.includes('{')) {
+                    typeText = typeText.split('{')[0].trim();
+                }
                 for (let i = 0; i < node.childCount; i++) {
                     const child = node.child(i)!;
                     if (child === typeNode || child.type === ',' || child.type === ';') {
@@ -507,6 +511,49 @@ export function analyzeCFunction(
 }
 
 /**
+ * 代入式の左辺（LHS）のノードを再帰的に掘り下げ、根元の変数名（識別子）と、
+ * ポインタ書き込み（デレファレンス * やアロー演算子 -> の有無）を解決します。
+ */
+function resolveLhsVariable(node: Parser.SyntaxNode): { name: string; isPointerWrite: boolean } | null {
+    let current: Parser.SyntaxNode | null = node;
+    let isPointerWrite = false;
+
+    while (current) {
+        if (current.type === 'pointer_expression') {
+            isPointerWrite = true;
+            current = current.childForFieldName('argument') || current.child(1);
+        }
+        else if (current.type === 'field_expression') {
+            const operator = current.child(1);
+            if (operator && operator.text === '->') {
+                isPointerWrite = true;
+            }
+            current = current.childForFieldName('argument') || current.child(0);
+        }
+        else if (current.type === 'subscript_expression') {
+            isPointerWrite = true;
+            current = current.childForFieldName('argument') || current.child(0);
+        }
+        else if (current.type === 'parenthesized_declarator') {
+            current = current.childForFieldName('declarator') || current.child(1);
+        }
+        else if (current.type === 'parenthesized_expression') {
+            current = current.childForFieldName('expression') || current.child(1);
+        }
+        else if (current.type === 'update_expression') {
+            current = current.childForFieldName('argument') || current.child(0);
+        }
+        else if (current.type === 'identifier') {
+            return { name: current.text, isPointerWrite };
+        }
+        else {
+            break;
+        }
+    }
+    return null;
+}
+
+/**
  * 代入式の左辺（LHS）のノードをチェックし、ポインタ引数またはグローバル変数への書き込みを判定します。
  */
 function checkLhsWrites(
@@ -516,65 +563,23 @@ function checkLhsWrites(
     pointerWrites: Set<string>,
     globalVarWrites: Set<string>
 ) {
-    // 1. デリファレンスによる書き込み (*ptr = ...)
-    if (node.type === 'pointer_expression') {
-        const operand = node.child(1) || node.childForFieldName('argument');
-        if (operand && operand.type === 'identifier') {
-            const name = operand.text;
-            const param = params.find(p => p.name === name);
-            if (param && param.isPointer) {
-                pointerWrites.add(name);
-            }
-        }
+    const resolved = resolveLhsVariable(node);
+    if (!resolved) {
+        return;
     }
-    // 2. 構造体/共用体アローアクセスによるポインタ書き込み (ptr->member = ...)
-    else if (node.type === 'field_expression') {
-        const argument = node.child(0) || node.childForFieldName('argument');
-        const operator = node.child(1);
-        if (argument && argument.type === 'identifier') {
-            const name = argument.text;
-            // アロー演算子（->）によるアクセスの場合はポインタ書き込み
-            if (operator && operator.text === '->') {
-                const param = params.find(p => p.name === name);
-                if (param && param.isPointer) {
-                    pointerWrites.add(name);
-                }
-            } else if (operator && operator.text === '.') {
-                // 直接ドットアクセス (data.member = ...) で、それがグローバル変数である場合
-                const isParam = params.some(p => p.name === name);
-                const isLocal = localVars.has(name);
-                if (!isParam && !isLocal && !EXCLUDE_LIST.has(name)) {
-                    globalVarWrites.add(name);
-                }
-            }
+
+    const { name, isPointerWrite } = resolved;
+
+    if (isPointerWrite) {
+        const param = params.find(p => p.name === name);
+        if (param && param.isPointer) {
+            pointerWrites.add(name);
         }
-    }
-    // 3. 配列要素への書き込み (array[index] = ...)
-    else if (node.type === 'subscript_expression') {
-        const argument = node.child(0) || node.childForFieldName('argument');
-        if (argument && argument.type === 'identifier') {
-            const name = argument.text;
-            const param = params.find(p => p.name === name);
-            if (param && param.isPointer) {
-                pointerWrites.add(name);
-            } else {
-                const isLocal = localVars.has(name);
-                const isParam = params.some(p => p.name === name);
-                // ローカル変数でも引数でもない場合のみグローバル変数とする
-                if (!isLocal && !isParam && !EXCLUDE_LIST.has(name)) {
-                    globalVarWrites.add(name);
-                }
-            }
-        }
-    }
-    // 4. 単純な変数代入 (var = ...)
-    else if (node.type === 'identifier') {
-        const name = node.text;
-        const isParam = params.some(p => p.name === name);
+    } else {
         const isLocal = localVars.has(name);
-        
-        // 引数でもローカル変数でもない場合はグローバル変数への書き込み
-        if (!isParam && !isLocal && !EXCLUDE_LIST.has(name)) {
+        const isParam = params.some(p => p.name === name);
+        // ローカル変数でも引数でもない場合はグローバル変数への書き込み
+        if (!isLocal && !isParam && !EXCLUDE_LIST.has(name)) {
             globalVarWrites.add(name);
         }
     }
@@ -598,11 +603,17 @@ function isLhsNode(node: Parser.SyntaxNode): boolean {
             const left = parent.childForFieldName('left') || parent.child(0);
             // 代入式の左辺ツリーの下にあるノードであれば Lhs
             if (left && (left.id === current.id || isAncestor(left, current))) {
+                // 複合代入（+=, -= など）の場合は、右辺（読み取り）としても出現していると判定する
+                const operator = parent.childForFieldName('operator') || parent.child(1);
+                if (operator && operator.text !== '=') {
+                    return false;
+                }
                 return true;
             }
         }
         if (parent.type === 'update_expression') {
-            return true;
+            // インクリメント・デクリメントは読み取りも兼ねるため、LHS（書き込み専用）とはみなさない
+            return false;
         }
         current = parent;
     }

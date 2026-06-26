@@ -1,6 +1,18 @@
 import * as vscode from 'vscode';
 import { AnalysisResult } from './analyzer';
 
+/**
+ * HTMLの特殊文字をエスケープしてXSSや表示崩れを防ぎます。
+ */
+function escapeHtml(str: string): string {
+    return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
 export class FunctionAnalyzerWebview {
     public static currentPanel: FunctionAnalyzerWebview | undefined;
     private readonly _panel: vscode.WebviewPanel;
@@ -112,13 +124,13 @@ export class FunctionAnalyzerWebview {
                 return '<div class="no-data">検出された変数はありません</div>';
             }
             return vars.map(v => `
-                <div class="variable-item" data-name="${v.name}">
+                <div class="variable-item" data-name="${escapeHtml(v.name)}">
                     <div class="variable-row">
                         <div class="variable-info">
-                            <span class="variable-type">${v.type}</span>
-                            <span class="variable-name">${v.name}</span>
+                            <span class="variable-type">${escapeHtml(v.type)}</span>
+                            <span class="variable-name">${escapeHtml(v.name)}</span>
                         </div>
-                        <button class="var-copy-button" data-name="${v.name}">コピー</button>
+                        <button class="var-copy-button" data-name="${escapeHtml(v.name)}">コピー</button>
                     </div>
                 </div>
             `).join('');
@@ -132,12 +144,12 @@ export class FunctionAnalyzerWebview {
             return funcs.map(f => {
                 const cleanName = f.endsWith('()') ? f.slice(0, -2) : f;
                 return `
-                <div class="variable-item" data-name="${cleanName}">
+                <div class="variable-item" data-name="${escapeHtml(cleanName)}">
                     <div class="variable-row">
                         <div class="variable-info">
-                            <span class="variable-name">${f}</span>
+                            <span class="variable-name">${escapeHtml(f)}</span>
                         </div>
-                        <button class="var-copy-button" data-name="${cleanName}">コピー</button>
+                        <button class="var-copy-button" data-name="${escapeHtml(cleanName)}">コピー</button>
                     </div>
                 </div>
                 `;
@@ -149,7 +161,7 @@ export class FunctionAnalyzerWebview {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Function Analysis: ${result.functionName}</title>
+    <title>Function Analysis: ${escapeHtml(result.functionName)}</title>
     <style>
         :root {
             --border-color: var(--vscode-panel-border, rgba(255, 255, 255, 0.08));
@@ -383,7 +395,7 @@ export class FunctionAnalyzerWebview {
     <div class="header">
         <div class="header-meta">C Function Analysis</div>
         <h1 class="header-title">
-            <span>${result.functionName}</span>
+            <span>${escapeHtml(result.functionName)}</span>
         </h1>
     </div>
 
@@ -506,6 +518,11 @@ export class FunctionAnalyzerWebview {
      * エディタ上の対象関数内にある該当変数を強調表示します。
      */
     private _highlightVariableInEditor(name: string, startLine: number, endLine: number, filePath?: string) {
+        // 戻り値 (return) や 推定 などの実体のないダミー項目はハイライトしない
+        if (name === '戻り値 (return)' || name.includes('推定')) {
+            return;
+        }
+
         let editor = vscode.window.activeTextEditor;
         if (filePath) {
             const found = vscode.window.visibleTextEditors.find(e => e.document.uri.toString() === filePath);
