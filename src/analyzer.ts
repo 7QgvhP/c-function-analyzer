@@ -570,16 +570,17 @@ function checkLhsWrites(
 
     const { name, isPointerWrite } = resolved;
 
-    if (isPointerWrite) {
-        const param = params.find(p => p.name === name);
-        if (param && param.isPointer) {
+    const param = params.find(p => p.name === name);
+    if (param) {
+        // 引数の場合: ポインタ/配列引数であり、かつデレファレンス（*, ->, []）を伴う書き込みであれば追加
+        if (param.isPointer && isPointerWrite) {
             pointerWrites.add(name);
         }
     } else {
+        // 引数以外（＝グローバル変数、またはローカル変数）の場合:
         const isLocal = localVars.has(name);
-        const isParam = params.some(p => p.name === name);
-        // ローカル変数でも引数でもない場合はグローバル変数への書き込み
-        if (!isLocal && !isParam && !EXCLUDE_LIST.has(name)) {
+        // ローカル変数でも除外リストでもない場合のみ、グローバル変数への書き込み（出力）とする
+        if (!isLocal && !EXCLUDE_LIST.has(name)) {
             globalVarWrites.add(name);
         }
     }

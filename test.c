@@ -9,11 +9,12 @@ int global_config_threshold = 100;
 int output_val;
 int hoge[10];
 
-struct hogestruct
+typedef struct 
 {
     int a;
     int b;
-};
+} HOGESTRUCT;
+HOGESTRUCT hogestruct[5];
 
 
 // テスト用のダミー関数
@@ -60,10 +61,10 @@ int process_sensor_data(int sensor_id, const char *sensor_name, int *out_status,
         hoge[i] = i;
     }
 
-    hogestruct.a = 100;
-    hogestruct.b = 200;
+    hogestruct[0].a = 100;
+    hogestruct[0].b = 200;
 
-    // calculated_val = hogestruct.a;
+    calculated_val = hogestruct[0].a;
 
     output_val = 100;
 
