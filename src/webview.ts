@@ -179,6 +179,7 @@ export class FunctionAnalyzerWebview {
             padding: 20px;
             box-sizing: border-box;
             line-height: 1.6;
+            min-width: 280px;
         }
 
         /* ヘッダーセクション */
@@ -188,6 +189,7 @@ export class FunctionAnalyzerWebview {
             background: rgba(255, 255, 255, 0.01);
             border: 1px solid var(--border-color);
             border-radius: 8px;
+            overflow: hidden;
         }
 
         .header-meta {
@@ -208,6 +210,7 @@ export class FunctionAnalyzerWebview {
             gap: 12px;
             word-break: break-all;
             color: var(--vscode-editor-foreground, #ffffff);
+            flex-wrap: wrap;
         }
 
         .header-return-type {
@@ -236,6 +239,7 @@ export class FunctionAnalyzerWebview {
             padding: 18px 20px;
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
             transition: border-color 0.2s ease, box-shadow 0.2s ease;
+            overflow: hidden;
         }
         .section-container:hover {
             border-color: rgba(255, 255, 255, 0.15);
@@ -284,6 +288,7 @@ export class FunctionAnalyzerWebview {
             border-radius: 10px;
             border: 1px solid rgba(255, 255, 255, 0.04);
             font-family: var(--font-mono);
+            flex-shrink: 0;
         }
 
         /* 変数行リスト */
@@ -314,12 +319,16 @@ export class FunctionAnalyzerWebview {
             display: flex;
             justify-content: space-between;
             align-items: center;
+            gap: 6px;
+            min-width: 0;
         }
 
         .variable-info {
             display: flex;
             align-items: center;
             gap: 8px;
+            min-width: 0;
+            flex: 1;
         }
 
         .variable-name {
@@ -327,6 +336,10 @@ export class FunctionAnalyzerWebview {
             font-family: var(--font-mono);
             font-size: 0.9rem;
             color: var(--vscode-editor-foreground, #ffffff);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            min-width: 0;
         }
 
         .variable-type {
@@ -338,7 +351,8 @@ export class FunctionAnalyzerWebview {
             border-radius: 4px;
             border: 1px solid rgba(255, 255, 255, 0.04);
             transition: background 0.2s ease;
-            flex: 0 0 140px;
+            max-width: 140px;
+            flex-shrink: 0;
             box-sizing: border-box;
             text-align: center;
             white-space: nowrap;
@@ -359,6 +373,8 @@ export class FunctionAnalyzerWebview {
             cursor: pointer;
             transition: all 0.2s ease;
             opacity: 0;
+            flex-shrink: 0;
+            white-space: nowrap;
         }
 
         .variable-item:hover .var-copy-button {
@@ -378,8 +394,6 @@ export class FunctionAnalyzerWebview {
             opacity: 1 !important;
         }
 
-
-
         .no-data {
             color: var(--text-muted);
             font-size: 0.8rem;
@@ -388,6 +402,35 @@ export class FunctionAnalyzerWebview {
             background: rgba(255, 255, 255, 0.005);
             border: 1px dashed var(--border-color);
             border-radius: 6px;
+        }
+
+        /* レスポンシブ対応: 狭い幅でのレイアウト調整 */
+        @media (max-width: 400px) {
+            body {
+                padding: 12px;
+            }
+            .header {
+                padding: 12px 14px;
+            }
+            .header-title {
+                font-size: 1.15rem;
+                gap: 8px;
+            }
+            .section-container {
+                padding: 14px 14px;
+            }
+            .variable-info {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 4px;
+            }
+            .variable-type {
+                max-width: 100%;
+                flex-shrink: 1;
+            }
+            .variable-item {
+                padding: 8px 8px;
+            }
         }
     </style>
 </head>
@@ -499,11 +542,11 @@ export class FunctionAnalyzerWebview {
                         text: name
                     });
                     
-                    const originalText = button.textContent;
+                    
                     button.textContent = "完了";
                     button.classList.add('copied');
                     setTimeout(() => {
-                        button.textContent = originalText;
+                        button.textContent = "コピー";
                         button.classList.remove('copied');
                     }, 1000);
                 }
