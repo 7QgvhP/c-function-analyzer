@@ -6,7 +6,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildHighlightRegex, isHighlightableName } from '../src/highlight';
+import { buildHighlightRegex } from '../src/highlight';
 
 /**
  * 指定コード行に対して、生成した正規表現がマッチした文字列をすべて返します。
@@ -19,18 +19,6 @@ function matchAll(name: string, line: string): string[] {
     const regex = buildHighlightRegex(name);
     return line.match(regex) ?? [];
 }
-
-describe('isHighlightableName', () => {
-    test('通常の変数名はハイライト対象とする', () => {
-        assert.equal(isHighlightableName('hoge'), true);
-        assert.equal(isHighlightableName('hoge[]'), true);
-        assert.equal(isHighlightableName('var_ptr->sub.member'), true);
-    });
-
-    test('「戻り値 (return)」はハイライト対象外とする (v1.13.3)', () => {
-        assert.equal(isHighlightableName('戻り値 (return)'), false);
-    });
-});
 
 describe('buildHighlightRegex', () => {
     test('単純な変数名にマッチする', () => {

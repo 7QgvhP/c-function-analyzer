@@ -6,32 +6,6 @@
  */
 
 /**
- * 解析結果のうち、エディタ上に実体を持たないダミー項目の表示名です。
- * （analyzer.ts 側でも同一の文字列を生成しているため、将来的に定数を共有化する余地があります）
- */
-export const RETURN_VALUE_LABEL = '戻り値 (return)';
-
-/**
- * 指定された項目名がエディタ上でハイライト検索の対象になるか判定します。
- *
- * @param name Webview 上に表示されている項目名
- * @returns ハイライト検索を行う場合は true
- */
-export function isHighlightableName(name: string): boolean {
-    // 「戻り値 (return)」はエディタ上に対応する識別子が存在しないため対象外とする
-    if (name === RETURN_VALUE_LABEL) {
-        return false;
-    }
-    // 「(推定)」を含む項目も対象外とする
-    // 注: 「推定」は型名（global (推定) 等）側に付与される文字列であり、
-    //     項目名には現れないため、この条件は現状では成立しない（要改善）
-    if (name.includes('推定')) {
-        return false;
-    }
-    return true;
-}
-
-/**
  * 項目名から、エディタ上の該当箇所を検索する正規表現を生成します。
  *
  * アクセスパス中の `[]`（添字を正規化した表記）は、コード上の実際の添字
