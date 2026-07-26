@@ -138,6 +138,43 @@ int target(int a) {
         assert.equal(r, null);
     });
 
+    test('複数の関数定義がある場合にカーソル行の関数を同定する', async () => {
+        const src = `
+int first(int a) {
+    return a;
+}
+
+int second(int b) {
+    return b;
+}
+`;
+        assert.equal((await analyzeOrThrow(src, 'int first(')).functionName, 'first');
+        assert.equal((await analyzeOrThrow(src, 'int second(')).functionName, 'second');
+    });
+
+    test('プリプロセッサ条件 (#ifdef) 内の関数定義も同定する', async () => {
+        const r = await analyzeOrThrow(`
+#ifdef DEBUG
+void debug_func(int level) {
+    (void)level;
+}
+#endif
+`, 'void debug_func(');
+        assert.equal(r.functionName, 'debug_func');
+        assert.ok(names(r.inputs).includes('level'), `入力に level が含まれること: ${names(r.inputs)}`);
+    });
+
+    test('関数の外側（グローバル宣言の行）では null を返す', async () => {
+        const r = await analyze(`
+int global_var = 0;
+
+int fn(void) {
+    return global_var;
+}
+`, 'int global_var = 0');
+        assert.equal(r, null);
+    });
+
     test('複数行にまたがるシグネチャの引数行でも解析が成功する', async () => {
         const r = await analyze(`
 int multi(

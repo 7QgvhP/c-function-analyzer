@@ -43,6 +43,29 @@ interface ParamInfo {
     isPointer: boolean;
 }
 
+/** フェーズ3: 関数シグネチャの解析結果 */
+interface SignatureInfo {
+    functionName: string;
+    returnType: string;
+    params: ParamInfo[];
+}
+
+/** フェーズ4: 関数ボディの走査で収集した生データ */
+interface BodyAnalysis {
+    /** ローカル変数（名前 → 型名） */
+    localVars: Map<string, string>;
+    /** 直接呼び出されている関数名 */
+    calledFunctions: Set<string>;
+    /** 読み取られているグローバル変数のアクセスパス */
+    globalVarReads: Set<string>;
+    /** 書き込まれているグローバル変数のアクセスパス */
+    globalVarWrites: Set<string>;
+    /** 読み取られているポインタ引数のアクセスパス */
+    pointerReads: Set<string>;
+    /** 書き込まれているポインタ引数のアクセスパス */
+    pointerWrites: Set<string>;
+}
+
 /** 宣言子（declarator）の解析結果 */
 interface DeclaratorInfo {
     /** 宣言されている識別子名（解決できなかった場合は空文字列） */
@@ -178,62 +201,67 @@ function collectDeclaredVars(declNode: Parser.SyntaxNode, into: Map<string, stri
 }
 
 /**
- * C言語コードを解析し、カーソル行にある関数情報を抽出します。
- * @param tree 解析対象のASTツリー
- * @param cursorLine ユーザーがカーソルを置いている行（0始まり）
- * @returns 解析結果、またはカーソルが関数名部分にない場合は null
+ * フェーズ1: ファイル直下の変数宣言をスキャンし、グローバル変数の型情報を収集します。
+ *
+ * @param rootNode ASTのルートノード
+ * @returns 変数名 → 型名 のマップ
  */
-export function analyzeCFunction(
-    tree: Parser.Tree,
-    cursorLine: number,
-    classifyAllUppercaseAsMacros: boolean = true
-): AnalysisResult | null {
-    const rootNode = tree.rootNode;
-
-    // ファイル直下の変数宣言をスキャンして型情報を収集
+function collectFileScopeVars(rootNode: Parser.SyntaxNode): Map<string, string> {
     const fileScopeVars = new Map<string, string>();
     rootNode.children.forEach(node => {
         if (node.type === 'declaration') {
             collectDeclaredVars(node, fileScopeVars);
         }
     });
+    return fileScopeVars;
+}
 
-    let targetFunctionNode: Parser.SyntaxNode | null = null;
-    let isCursorOnSignature = false;
+/**
+ * フェーズ2: カーソル行にある関数定義を同定します。
+ *
+ * カーソル位置のノードから祖先を辿って function_definition を探すため、
+ * AST全体を走査する必要がありません（`#ifdef` などで入れ子になった関数定義にも対応します）。
+ * カーソルがシグネチャ行（戻り値の型の行から引数リストの閉じ括弧の行まで）に
+ * ない場合は解析対象外とします。
+ *
+ * @param rootNode ASTのルートノード
+ * @param cursorLine カーソル行（0始まり）
+ * @returns 対象の function_definition ノード、該当しない場合は null
+ */
+function findFunctionAtCursor(rootNode: Parser.SyntaxNode, cursorLine: number): Parser.SyntaxNode | null {
+    // カーソル行の先頭位置にあるノードを起点とする
+    const nodeAtCursor = rootNode.descendantForPosition({ row: cursorLine, column: 0 });
 
-    // 1. カーソルがある関数定義 (function_definition) を探索
-    walk(rootNode, (node) => {
-        if (node.type === 'function_definition') {
-            // 関数全体の行範囲
-            const startRow = node.startPosition.row;
-            const endRow = node.endPosition.row;
-
-            if (cursorLine >= startRow && cursorLine <= endRow) {
-                const declaratorNode = node.childForFieldName('declarator');
-                if (declaratorNode) {
-                    const sigStartRow = node.startPosition.row; // 戻り値の型から開始
-                    const sigEndRow = declaratorNode.endPosition.row; // 引数リストの閉じ括弧で終了
-
-                    if (cursorLine >= sigStartRow && cursorLine <= sigEndRow) {
-                        targetFunctionNode = node;
-                        isCursorOnSignature = true;
-                    }
-                }
-            }
-        }
-    });
-
-    // カーソルが関数名や引数リストの行にない場合は解析をスキップ
-    if (!targetFunctionNode || !isCursorOnSignature) {
+    // 直近の function_definition の祖先を探す
+    let current: Parser.SyntaxNode | null = nodeAtCursor;
+    while (current && current.type !== 'function_definition') {
+        current = current.parent;
+    }
+    if (!current) {
         return null;
     }
 
-    const funcNode = targetFunctionNode as Parser.SyntaxNode;
+    // シグネチャ行の範囲内にカーソルがあるかを判定する
+    const declaratorNode = current.childForFieldName('declarator');
+    if (!declaratorNode) {
+        return null;
+    }
+    const sigStartRow = current.startPosition.row;      // 戻り値の型から開始
+    const sigEndRow = declaratorNode.endPosition.row;   // 引数リストの閉じ括弧で終了
 
-    const startLine = funcNode.startPosition.row;
-    const endLine = funcNode.endPosition.row;
+    if (cursorLine < sigStartRow || cursorLine > sigEndRow) {
+        return null;
+    }
+    return current;
+}
 
-    // 2. 関数名と戻り値の型を抽出
+/**
+ * フェーズ3: 関数シグネチャ（関数名・戻り値の型・引数リスト）を解析します。
+ *
+ * @param funcNode function_definition ノード
+ * @returns シグネチャの解析結果
+ */
+function parseSignature(funcNode: Parser.SyntaxNode): SignatureInfo {
     let functionName = 'unknown';
     let returnType = 'void';
 
@@ -257,7 +285,6 @@ export function analyzeCFunction(
         returnType = rawType + '*'.repeat(declaratorInfo ? declaratorInfo.pointerDepth : 0);
     }
 
-    // 3. 引数の抽出
     const params: ParamInfo[] = [];
     // 関数名の識別子に最も近い function_declarator が、実際の引数リストを保持する。
     // （関数ポインタを返す関数では外側の function_declarator が別の引数リストを持つため、
@@ -301,20 +328,28 @@ export function analyzeCFunction(
         }
     }
 
-    // 4. 関数内部（ボディ）の解析（変数、グローバル変数、関数呼び出し、書き込み判定）
-    const bodyNode = funcNode.childForFieldName('body');
-    
+    return { functionName, returnType, params };
+}
+
+/**
+ * フェーズ4: 関数ボディを走査し、変数の宣言・参照・書き込み、および関数呼び出しを収集します。
+ *
+ * @param bodyNode 関数ボディ (compound_statement) ノード。存在しない場合は null
+ * @param params フェーズ3で解析した引数リスト
+ * @returns 収集した生データ
+ */
+function analyzeBody(bodyNode: Parser.SyntaxNode | null, params: ParamInfo[]): BodyAnalysis {
     // 解析中に見つかったローカル変数、グローバル変数、呼び出し関数を格納するセット
     const localVars = new Map<string, string>(); // name -> type
     const calledFunctionsSet = new Set<string>();
-    
+
     // グローバル変数の出現箇所を記録する
     const globalVarReads = new Set<string>();
     const globalVarWrites = new Set<string>();
-    
+
     // ポインタ引数の書き込み状況を追跡する
     const pointerWrites = new Set<string>();
-    
+
     // ポインタ引数の読み取り状況を追跡する
     const pointerReads = new Set<string>();
 
@@ -403,7 +438,36 @@ export function analyzeCFunction(
         });
     }
 
-    // 5. 解析結果を inputs / outputs / internalVariables に分類・統合
+    return {
+        localVars,
+        calledFunctions: calledFunctionsSet,
+        globalVarReads,
+        globalVarWrites,
+        pointerReads,
+        pointerWrites
+    };
+}
+
+/**
+ * フェーズ5: 収集したデータを入力変数・出力変数・内部変数などへ分類・統合します。
+ *
+ * @param funcNode function_definition ノード（行範囲の取得に使用）
+ * @param signature フェーズ3のシグネチャ解析結果
+ * @param body フェーズ4のボディ解析結果
+ * @param fileScopeVars フェーズ1で収集したグローバル変数の型情報
+ * @param classifyAllUppercaseAsMacros 大文字のみの識別子をマクロとして分類するか
+ * @returns 最終的な解析結果
+ */
+function buildResult(
+    funcNode: Parser.SyntaxNode,
+    signature: SignatureInfo,
+    body: BodyAnalysis,
+    fileScopeVars: Map<string, string>,
+    classifyAllUppercaseAsMacros: boolean
+): AnalysisResult {
+    const { functionName, returnType, params } = signature;
+    const { localVars, calledFunctions, globalVarReads, globalVarWrites, pointerReads, pointerWrites } = body;
+
     const inputs: VariableInfo[] = [];
     const outputs: VariableInfo[] = [];
     const macroVariables: VariableInfo[] = [];
@@ -411,7 +475,7 @@ export function analyzeCFunction(
     const normalCalledFunctions: string[] = [];
 
     // 呼び出し関数の大文字マクロ分類
-    calledFunctionsSet.forEach(func => {
+    calledFunctions.forEach(func => {
         if (classifyAllUppercaseAsMacros && isAllUppercase(func)) {
             macroFunctions.push(func);
         } else {
@@ -528,9 +592,44 @@ export function analyzeCFunction(
         calledFunctions: normalCalledFunctions,
         macroVariables,
         macroFunctions,
-        startLine,
-        endLine
+        startLine: funcNode.startPosition.row,
+        endLine: funcNode.endPosition.row
     };
+}
+
+/**
+ * C言語コードを解析し、カーソル行にある関数情報を抽出します。
+ *
+ * 解析は以下の5フェーズで構成されます（詳細は docs/analysis_spec.md を参照）。
+ *   1. ファイルスコープの型情報収集   (collectFileScopeVars)
+ *   2. カーソル位置の関数同定         (findFunctionAtCursor)
+ *   3. 関数シグネチャの解析           (parseSignature)
+ *   4. 関数ボディの走査               (analyzeBody)
+ *   5. 解析結果の分類・統合           (buildResult)
+ *
+ * @param tree 解析対象のASTツリー
+ * @param cursorLine ユーザーがカーソルを置いている行（0始まり）
+ * @param classifyAllUppercaseAsMacros 大文字のみの識別子をマクロとして分類するか
+ * @returns 解析結果、またはカーソルが関数名部分にない場合は null
+ */
+export function analyzeCFunction(
+    tree: Parser.Tree,
+    cursorLine: number,
+    classifyAllUppercaseAsMacros: boolean = true
+): AnalysisResult | null {
+    const rootNode = tree.rootNode;
+
+    const fileScopeVars = collectFileScopeVars(rootNode);
+
+    const funcNode = findFunctionAtCursor(rootNode, cursorLine);
+    if (!funcNode) {
+        return null;
+    }
+
+    const signature = parseSignature(funcNode);
+    const body = analyzeBody(funcNode.childForFieldName('body'), signature.params);
+
+    return buildResult(funcNode, signature, body, fileScopeVars, classifyAllUppercaseAsMacros);
 }
 
 /**
