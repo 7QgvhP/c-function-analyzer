@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { AnalysisResult } from './analyzer';
+import { buildHighlightRegex, isHighlightableName } from './highlight';
 
 /**
  * HTMLの特殊文字をエスケープしてXSSや表示崩れを防ぎます。
@@ -561,8 +562,8 @@ export class FunctionAnalyzerWebview {
      * エディタ上の対象関数内にある該当変数を強調表示します。
      */
     private _highlightVariableInEditor(name: string, startLine: number, endLine: number, filePath?: string) {
-        // 戻り値 (return) や 推定 などの実体のないダミー項目はハイライトしない
-        if (name === '戻り値 (return)' || name.includes('推定')) {
+        // 戻り値 (return) などの実体のないダミー項目はハイライトしない
+        if (!isHighlightableName(name)) {
             return;
         }
 
@@ -593,14 +594,8 @@ export class FunctionAnalyzerWebview {
         const doc = editor.document;
         const ranges: vscode.Range[] = [];
 
-        // C言語の識別子・アクセスパスとして一致するもののみを検索 (単語境界 \b を使用)
-        let pattern = name.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-        // '[]' の箇所はコード上の実際の添字 '[0]' や '[i]' などにマッチする正規表現パターンに変換
-        pattern = pattern.replace(/\\\[\\\]/g, '\\[[^\\]]+\\]');
-        // 末尾が添字の閉じ括弧 ']' の場合、直後に続くのは空白や ';', '=' などの非単語文字であることが多く、
-        // \b（単語境界）は非単語文字同士の間では成立しないため末尾の \b を付けない（']' 自体が区切りとして機能する）
-        const endsWithSubscript = pattern.endsWith('\\]');
-        const regex = new RegExp(`\\b${pattern}${endsWithSubscript ? '' : '\\b'}`, 'g');
+        // C言語の識別子・アクセスパスとして一致するもののみを検索する正規表現を生成
+        const regex = buildHighlightRegex(name);
 
         for (let lineNum = startLine; lineNum <= endLine; lineNum++) {
             if (lineNum >= doc.lineCount) {
