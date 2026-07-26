@@ -23,17 +23,29 @@
 
 ```mermaid
 flowchart TD
-    A["カーソル行の関数同定 (function_definition)"] --> B["ファイル全体の型情報収集 (fileScopeVars)"]
-    B --> C["関数シグネチャの解析 (関数名, 戻り値型, 引数リスト)"]
-    C --> D["関数ボディの AST 再帰走査 (walk)"]
+    A["フェーズ1: ファイル全体の型情報収集 (collectFileScopeVars)"] --> B["フェーズ2: カーソル行の関数同定 (findFunctionAtCursor)"]
+    B --> C["フェーズ3: 関数シグネチャの解析 (parseSignature)"]
+    C --> D["フェーズ4: 関数ボディの AST 再帰走査 (analyzeBody)"]
     D --> E1["ローカル変数宣言の抽出 (declaration)"]
     D --> E2["関数呼び出しの抽出 (call_expression)"]
     D --> E3["代入・更新式の左辺解析 (checkLhsWrites / resolveLhsVariable)"]
     D --> E4["識別子参照の右辺/読み取り解析 (identifier)"]
-    E1 & E2 & E3 & E4 --> F["解析結果の統合・入出力分類"]
+    E1 & E2 & E3 & E4 --> F["フェーズ5: 解析結果の統合・入出力分類 (buildResult)"]
     F --> G["大文字マクロ分類処理 (オプション)"]
     G --> H["Webview へ描画・ハイライト機能適用"]
 ```
+
+### 実装との対応
+
+各フェーズは `src/analyzer.ts` の同名関数に1対1で対応しており、`analyzeCFunction` はこれらを順に呼び出すだけの薄い関数です。
+
+| フェーズ | 関数名 |
+|---|---|
+| 1 | `collectFileScopeVars` |
+| 2 | `findFunctionAtCursor` |
+| 3 | `parseSignature` |
+| 4 | `analyzeBody` |
+| 5 | `buildResult` |
 
 ---
 
@@ -45,29 +57,64 @@ flowchart TD
 int global_counter = 0;              // name: "global_counter", type: "int"
 struct Config global_cfg;            // name: "global_cfg", type: "struct Config"
 struct Data { int x; } global_data;  // name: "global_data", type: "struct Data" (インライン定義のクレンジング後)
+int (*handler)(int);                 // name: "handler",     type: "int*"       (関数ポインタ変数)
+int prototype(int);                  // 関数プロトタイプ宣言のため登録されない
 ```
 
-- **型名クレンジング**: `struct Data { ... }` のようなインライン構造体定義が含まれる場合、`{` より前の型名部分（`struct Data`）のみを取り出して型として記録します。
+- **型名クレンジング** (`cleanTypeText`): `struct Data { ... }` のようなインライン構造体定義が含まれる場合、`{` より前の型名部分（`struct Data`）のみを取り出して型として記録します。改行や連続する空白も単一の空白へ正規化します。この処理は**ファイルスコープ・ローカル変数の双方に適用**されます。
+- **関数プロトタイプ宣言の除外**: 宣言が `function_declarator` を経由する場合、それが変数宣言か関数プロトタイプかを**ポインタ深さ (`pointerDepth`) で判別**します。
+  - `int prototype(int);` → `pointerDepth == 0` のため**変数ではない**と判定し、登録しません。
+  - `int (*handler)(int);` → `pointerDepth == 1`（`parenthesized_declarator` 内の `pointer_declarator` を経由）のため**関数ポインタ変数**として登録します。
+
+なお、変数宣言のスキャン処理（`collectDeclaredVars`）はファイルスコープとローカル変数で共通化されており、カンマ区切りの複数宣言・初期化子付き宣言・配列・多重ポインタ・関数ポインタ宣言に対応します。
 
 ---
 
 ## フェーズ 2: カーソル位置の関数同定
 
-ユーザーがエディタ上でカーソルを置いている行（`cursorLine`）が含まれる `function_definition` ノードを探索します。
+ユーザーがエディタ上でカーソルを置いている行（`cursorLine`）が含まれる `function_definition` ノードを特定します。
 
+- **探索方法**: カーソル行の先頭位置から `descendantForPosition` でノードを取得し、そこから**親方向へ辿って**最も近い `function_definition` を探します。AST 全体を走査しないため探索コストは木の深さに比例します。また、`#ifdef` などのプリプロセッサ条件ブロック内に入れ子になった関数定義も同じ仕組みで同定できます。
 - **シグネチャ位置判定**: 関数の戻り値型の開始行から、引数リストの閉じ括弧 `)`（`declaratorNode.endPosition.row`）までの行範囲内にカーソルがある場合のみ解析を実行します（関数ボディの中央などで実行された場合はスキップされます）。
 
 ---
 
 ## フェーズ 3: 関数シグネチャの解析
 
-### 3.1 関数名と戻り値の型
-- `declarator` ノードを再帰的に深掘りし、関数識別子（`identifier`）とポインタアスタリスクの深さ（`ptrCount`）を取得します。
+### 3.1 宣言子の解決 (`resolveDeclarator`)
+
+関数名・引数名・変数名の取得はすべて `resolveDeclarator` に集約されており、`declarator` ノードを再帰的に深掘りして以下を返します。
+
+| 返却値 | 内容 |
+|---|---|
+| `name` | 宣言されている識別子名 |
+| `pointerDepth` | ポインタ宣言（`*`）の深さ |
+| `arrayDepth` | 配列宣言（`[]`）の深さ |
+| `ownerFunctionDeclarator` | 識別子に最も近い `function_declarator` |
+
+`pointer_declarator` / `array_declarator` / `parenthesized_declarator` / `function_declarator` のいずれの入れ子にも対応します（`parenthesized_declarator` は `declarator` フィールドを持たないため、`(` の次の子へ進みます）。
+
+### 3.2 関数名と戻り値の型
+- `resolveDeclarator` で関数識別子と `pointerDepth` を取得し、戻り値型の末尾にポインタ深さ分のアスタリスクを付与します。
 - 関数の宣言型テキストから修飾子（`static`, `extern`, `inline`）を取り除き、クレンジングされた戻り値型（例: `int*`, `void`）を決定します。
 
-### 3.2 引数リスト (`params`)
-`parameter_list` 内の各 `parameter_declaration` を解析します。
-- `pointer_declarator`（`int *p`）および `array_declarator`（`int arr[]`）を検出し、**`isPointer = true`** として記録します。
+### 3.3 引数リスト (`params`)
+
+**引数リストの取得元**: `resolveDeclarator` が返す `ownerFunctionDeclarator`（＝関数名の識別子に最も近い `function_declarator`）の `parameters` フィールドを使用します。
+
+これは関数ポインタを返す関数で外側の引数リストを誤読しないためです。
+
+```c
+void (*get_handler(int id))(char *msg)
+//    ~~~~~~~~~~~~~~~~~~~~  内側の function_declarator → (int id)  ← 正しい引数リスト
+//   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ 外側の function_declarator → (char *msg)
+```
+
+各 `parameter_declaration` について以下を解析します。
+
+- **型テキストの切り出し**: `declarator` の開始位置（`startIndex`）までを切り出します。文字列検索を使うと、引数名が型名に含まれる場合（例: `struct data data`）に誤った位置で切れてしまうためです。
+- **ポインタ判定**: `pointerDepth > 0`（`int *p`）または `arrayDepth > 0`（`int arr[]`）の場合に **`isPointer = true`**（＝デレファレンスによる書き込みが可能）として記録します。
+- **型名の表示**: 型名の末尾にポインタ深さ分のアスタリスクを付与します（配列はポインタ1段として扱います）。例: `int *p` → `int*`、`int **pp` → `int**`、`int arr[]` → `int*`。
 
 ---
 
@@ -141,8 +188,8 @@ AST 内で `identifier` ノードが出現した際、それが読み取り（�
 flowchart LR
     subgraph Params["引数パラメータ (params)"]
         P1["値渡し引数"] --> Inputs["🔵 入力変数 (inputs)"]
-        P2["ポインタ引数 (pointerReads または 未検出)」"] --> Inputs
-        P3["ポインタ引数 (pointerWrites)」"] --> Outputs["🔴 出力変数 (outputs)"]
+        P2["ポインタ引数 (pointerReads または 未検出)"] --> Inputs
+        P3["ポインタ引数 (pointerWrites)"] --> Outputs["🔴 出力変数 (outputs)"]
     end
 
     subgraph Globals["グローバル変数"]
