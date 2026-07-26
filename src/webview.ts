@@ -597,7 +597,10 @@ export class FunctionAnalyzerWebview {
         let pattern = name.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
         // '[]' の箇所はコード上の実際の添字 '[0]' や '[i]' などにマッチする正規表現パターンに変換
         pattern = pattern.replace(/\\\[\\\]/g, '\\[[^\\]]+\\]');
-        const regex = new RegExp(`\\b${pattern}\\b`, 'g');
+        // 末尾が添字の閉じ括弧 ']' の場合、直後に続くのは空白や ';', '=' などの非単語文字であることが多く、
+        // \b（単語境界）は非単語文字同士の間では成立しないため末尾の \b を付けない（']' 自体が区切りとして機能する）
+        const endsWithSubscript = pattern.endsWith('\\]');
+        const regex = new RegExp(`\\b${pattern}${endsWithSubscript ? '' : '\\b'}`, 'g');
 
         for (let lineNum = startLine; lineNum <= endLine; lineNum++) {
             if (lineNum >= doc.lineCount) {
