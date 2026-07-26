@@ -351,24 +351,29 @@ export function analyzeCFunction(
                 }
 
                 if (!isFieldOrDeclaration) {
+                    const outerNode = getOuterAccessNode(node);
+                    const resolved = resolveLhsVariable(outerNode);
+                    const accessPath = resolved ? resolved.path : name;
+                    const rootName = resolved ? resolved.rootName : name;
+
                     // ポインタ引数の読み取りをチェック
-                    const targetParam = params.find(p => p.name === name);
+                    const targetParam = params.find(p => p.name === rootName);
                     if (targetParam && targetParam.isPointer) {
                         if (!isLhsNode(node)) {
-                            pointerReads.add(name);
+                            pointerReads.add(accessPath);
                         }
                     }
 
                     // 引数、ローカル変数、呼び出し関数、ブラックリストのいずれにも属さない場合
                     const isParam = targetParam !== undefined;
-                    const isLocal = localVars.has(name);
-                    const isCall = calledFunctionsSet.has(name);
+                    const isLocal = localVars.has(rootName);
+                    const isCall = calledFunctionsSet.has(rootName);
                     
-                    if (!isParam && !isLocal && !isCall && !EXCLUDE_LIST.has(name)) {
+                    if (!isParam && !isLocal && !isCall && !EXCLUDE_LIST.has(rootName)) {
                         // 読み取り（右辺等）で出現しているかチェック
                         // 代入式の左辺として既に書き込み判定されていなければ、読み取り（入力）とみなす
                         if (!isLhsNode(node)) {
-                            globalVarReads.add(name);
+                            globalVarReads.add(accessPath);
                         }
                     }
                 }
@@ -406,38 +411,43 @@ export function analyzeCFunction(
     params.forEach(p => {
         // すでに型テキストの末尾に '*' がある場合は重ねて付与しない
         const fullType = p.type.endsWith('*') ? p.type : (p.type + (p.isPointer ? '*' : ''));
-        
-        let isInput = false;
-        let isOutput = false;
 
         if (p.isPointer) {
-            if (pointerWrites.has(p.name)) {
-                isOutput = true;
+            const matchingWrites = Array.from(pointerWrites).filter(path => getRootName(path) === p.name);
+            const matchingReads = Array.from(pointerReads).filter(path => getRootName(path) === p.name);
+
+            if (matchingWrites.length > 0) {
+                matchingWrites.forEach(path => {
+                    outputs.push({
+                        name: path,
+                        type: fullType,
+                        details: '出力引数（ポインタ書き込みあり）'
+                    });
+                });
             }
-            if (pointerReads.has(p.name)) {
-                isInput = true;
+
+            if (matchingReads.length > 0) {
+                matchingReads.forEach(path => {
+                    inputs.push({
+                        name: path,
+                        type: fullType,
+                        details: '入力引数（ポインタ読み取りあり）'
+                    });
+                });
             }
-            // どちらも検出されなかった場合のセーフティガード（ポインタ引数としての存在）
-            if (!isInput && !isOutput) {
-                isInput = true;
+
+            if (matchingWrites.length === 0 && matchingReads.length === 0) {
+                inputs.push({
+                    name: p.name,
+                    type: fullType,
+                    details: '入力引数（ポインタ読み取りあり）'
+                });
             }
         } else {
-            // 値渡し引数は常に入力
-            isInput = true;
-        }
-
-        if (isInput) {
             inputs.push({
                 name: p.name,
                 type: fullType,
-                details: p.isPointer ? '入力引数（ポインタ読み取りあり）' : '入力引数（値渡し）'
-            });
-        }
-        if (isOutput) {
-            outputs.push({
-                name: p.name,
-                type: fullType,
-                details: '出力引数（ポインタ書き込みあり）'
+                details: '入力引数（値渡し）'
             });
         }
     });
@@ -455,35 +465,36 @@ export function analyzeCFunction(
     // グローバル変数の分類
     // 書き込みが行われているものは「グローバル変数（出力）」
     // 読み取りが行われているものは「グローバル変数（入力）」
-    globalVarWrites.forEach(name => {
-        if (classifyAllUppercaseAsMacros && isAllUppercase(name)) {
+    globalVarWrites.forEach(path => {
+        const rootName = getRootName(path);
+        if (classifyAllUppercaseAsMacros && isAllUppercase(rootName)) {
             macroVariables.push({
-                name,
+                name: path,
                 type: 'macro (推定)',
                 details: 'マクロ変数への書き込み'
             });
         } else {
-            const fileVarType = fileScopeVars.get(name);
+            const fileVarType = fileScopeVars.get(rootName);
             outputs.push({
-                name,
+                name: path,
                 type: fileVarType || 'global (推定)',
                 details: 'グローバル変数への書き込み'
             });
         }
     });
 
-    globalVarReads.forEach(name => {
-        // 制限を解除し、読み取りがあれば常に入力（Inputs）に分類する
-        if (classifyAllUppercaseAsMacros && isAllUppercase(name)) {
+    globalVarReads.forEach(path => {
+        const rootName = getRootName(path);
+        if (classifyAllUppercaseAsMacros && isAllUppercase(rootName)) {
             macroVariables.push({
-                name,
+                name: path,
                 type: 'macro (推定)',
                 details: 'マクロ変数からの読み取り'
             });
         } else {
-            const fileVarType = fileScopeVars.get(name);
+            const fileVarType = fileScopeVars.get(rootName);
             inputs.push({
-                name,
+                name: path,
                 type: fileVarType || 'global (推定)',
                 details: 'グローバル変数からの読み取り'
             });
@@ -511,46 +522,94 @@ export function analyzeCFunction(
 }
 
 /**
- * 代入式の左辺（LHS）のノードを再帰的に掘り下げ、根元の変数名（識別子）と、
- * ポインタ書き込み（デレファレンス * やアロー演算子 -> の有無）を解決します。
+ * アクセスパス文字列から根元の変数名を抽出します（例: hogestruct[].a -> hogestruct）。
  */
-function resolveLhsVariable(node: Parser.SyntaxNode): { name: string; isPointerWrite: boolean } | null {
-    let current: Parser.SyntaxNode | null = node;
-    let isPointerWrite = false;
+function getRootName(path: string): string {
+    const match = path.match(/^([a-zA-Z_][a-zA-Z0-9_]*)/);
+    return match ? match[1] : path;
+}
 
-    while (current) {
-        if (current.type === 'pointer_expression') {
-            isPointerWrite = true;
-            current = current.childForFieldName('argument') || current.child(1);
-        }
-        else if (current.type === 'field_expression') {
-            const operator = current.child(1);
-            if (operator && operator.text === '->') {
-                isPointerWrite = true;
+/**
+ * 対象ノードが含まれる最外枠のアクセス式ノード（field_expression, subscript_expression 等）を取得します。
+ */
+function getOuterAccessNode(node: Parser.SyntaxNode): Parser.SyntaxNode {
+    let curr = node;
+    while (curr.parent) {
+        const parent = curr.parent;
+        if (
+            parent.type === 'field_expression' ||
+            parent.type === 'subscript_expression' ||
+            parent.type === 'parenthesized_expression' ||
+            parent.type === 'parenthesized_declarator'
+        ) {
+            if (parent.type === 'subscript_expression') {
+                const indexNode = parent.childForFieldName('index') || parent.child(2);
+                if (indexNode && (indexNode.id === curr.id || isAncestor(indexNode, curr))) {
+                    break;
+                }
             }
-            current = current.childForFieldName('argument') || current.child(0);
-        }
-        else if (current.type === 'subscript_expression') {
-            isPointerWrite = true;
-            current = current.childForFieldName('argument') || current.child(0);
-        }
-        else if (current.type === 'parenthesized_declarator') {
-            current = current.childForFieldName('declarator') || current.child(1);
-        }
-        else if (current.type === 'parenthesized_expression') {
-            current = current.childForFieldName('expression') || current.child(1);
-        }
-        else if (current.type === 'update_expression') {
-            current = current.childForFieldName('argument') || current.child(0);
-        }
-        else if (current.type === 'identifier') {
-            return { name: current.text, isPointerWrite };
-        }
-        else {
+            curr = parent;
+        } else {
             break;
         }
     }
-    return null;
+    return curr;
+}
+
+/**
+ * 代入式の左辺（LHS）のノードを再帰的に掘り下げ、根元の変数名（rootName）と
+ * 正規化されたアクセスパス（path）、およびポインタ書き込み（デレファレンス * やアロー演算子 -> の有無）を解決します。
+ */
+function resolveLhsVariable(node: Parser.SyntaxNode): { rootName: string; path: string; isPointerWrite: boolean } | null {
+    const outerNode = getOuterAccessNode(node);
+    let rootName = '';
+    let isPointerWrite = false;
+
+    function buildPath(n: Parser.SyntaxNode): string {
+        if (n.type === 'identifier') {
+            rootName = n.text;
+            return n.text;
+        }
+        if (n.type === 'field_expression') {
+            const argNode = n.childForFieldName('argument') || n.child(0)!;
+            const opNode = n.child(1);
+            const fieldNode = n.childForFieldName('field') || n.child(2)!;
+
+            if (opNode && opNode.text === '->') {
+                isPointerWrite = true;
+            }
+            const argStr = buildPath(argNode);
+            const opStr = opNode ? opNode.text : '.';
+            const fieldStr = fieldNode ? fieldNode.text : '';
+            return `${argStr}${opStr}${fieldStr}`;
+        }
+        if (n.type === 'subscript_expression') {
+            isPointerWrite = true;
+            const argNode = n.childForFieldName('argument') || n.child(0)!;
+            const argStr = buildPath(argNode);
+            return `${argStr}[]`;
+        }
+        if (n.type === 'pointer_expression') {
+            isPointerWrite = true;
+            const argNode = n.childForFieldName('argument') || n.child(1)!;
+            return buildPath(argNode);
+        }
+        if (n.type === 'parenthesized_expression' || n.type === 'parenthesized_declarator') {
+            const inner = n.childForFieldName('expression') || n.childForFieldName('declarator') || n.child(1)!;
+            return buildPath(inner);
+        }
+        if (n.type === 'update_expression') {
+            const argNode = n.childForFieldName('argument') || n.child(0)!;
+            return buildPath(argNode);
+        }
+        return n.text;
+    }
+
+    const pathStr = buildPath(outerNode);
+    if (!rootName) {
+        return null;
+    }
+    return { rootName, path: pathStr, isPointerWrite };
 }
 
 /**
@@ -568,20 +627,20 @@ function checkLhsWrites(
         return;
     }
 
-    const { name, isPointerWrite } = resolved;
+    const { rootName, path, isPointerWrite } = resolved;
 
-    const param = params.find(p => p.name === name);
+    const param = params.find(p => p.name === rootName);
     if (param) {
         // 引数の場合: ポインタ/配列引数であり、かつデレファレンス（*, ->, []）を伴う書き込みであれば追加
         if (param.isPointer && isPointerWrite) {
-            pointerWrites.add(name);
+            pointerWrites.add(path);
         }
     } else {
         // 引数以外（＝グローバル変数、またはローカル変数）の場合:
-        const isLocal = localVars.has(name);
+        const isLocal = localVars.has(rootName);
         // ローカル変数でも除外リストでもない場合のみ、グローバル変数への書き込み（出力）とする
-        if (!isLocal && !EXCLUDE_LIST.has(name)) {
-            globalVarWrites.add(name);
+        if (!isLocal && !EXCLUDE_LIST.has(rootName)) {
+            globalVarWrites.add(path);
         }
     }
 }

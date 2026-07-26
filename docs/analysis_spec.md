@@ -87,26 +87,28 @@ struct Data { int x; } global_data;  // name: "global_data", type: "struct Data"
 
 代入式（`assignment_expression`）の左辺（`left`）およびインクリメント/デクリメント式（`update_expression`）の対象（`argument`）に対して、`resolveLhsVariable` を実行します。
 
-#### `resolveLhsVariable` による構文木の解読
-左辺の構文木を再帰的に遡り、根元の識別子名と、デレファレンス（書き込みアクセス）の有無（`isPointerWrite`）を判定します。
+#### `resolveLhsVariable` による構文木の解読およびアクセスパス正規化
+左辺またはアクセス式の構文木を深掘りし、根元の識別子名（`rootName`）、**アクセスパス文字列（`path`）**、およびデレファレンス（書き込みアクセス）の有無（`isPointerWrite`）を解決します。
 
-| 構文要素 | ASTノード型 | `isPointerWrite` の判定 |
-|---|---|---|
-| 間接参照 | `pointer_expression` (`*p = ...`) | `true` |
-| アロー演算子 | `field_expression` (`p->member = ...`) | `true` |
-| 配列アクセス | `subscript_expression` (`arr[i] = ...`) | `true` |
-| メンバ参照 | `field_expression` (`obj.member = ...`) | 継承（`->` でなければ `false`） |
+アクセスパス（`path`）は、**配列の添字内容を空の `[]` に正規化**した文字列として構築されます。
+
+| 入力コード例 | 根元識別子 (`rootName`) | アクセスパス (`path`) | `isPointerWrite` の判定 |
+|---|---|---|---|
+| `hogestruct[0].a = 100;` | `hogestruct` | `hogestruct[].a` | `true` (配列アクセス) |
+| `grid[1][2] = 20;` | `grid` | `grid[][]` | `true` (配列アクセス) |
+| `var_ptr->sub.member = 30;` | `var_ptr` | `var_ptr->sub.member` | `true` (アロー演算子) |
+| `global_val = 10;` | `global_val` | `global_val` | `false` |
 
 #### 書き込み先の分類ロジック (`checkLhsWrites`)
 
 ```mermaid
 flowchart TD
-    A["LHSノードの解析 (resolveLhsVariable)"] --> B{"変数名は引数リスト (params) に存在するか？"}
+    A["アクセスノードの解析 (resolveLhsVariable)"] --> B{"根元変数名 (rootName) は引数リストに存在するか？"}
     B -->|Yes: 引数| C{"isPointer == true かつ\nisPointerWrite == true ?"}
-    C -->|Yes| D["pointerWrites に追加 (出力引数)"]
+    C -->|Yes| D["pointerWrites に正規化パス (path) を追加 (出力引数)"]
     C -->|No| E["無視 (値渡し引数へのローカル代入)"]
-    B -->|No: 引数以外| F{"ローカル変数 (localVars) または\nブラックリスト (EXCLUDE_LIST) か？"}
-    F -->|No| G["globalVarWrites に追加 (出力グローバル変数)"]
+    B -->|No: 引数以外| F{"根元変数がローカル変数または\n除外リストか？"}
+    F -->|No| G["globalVarWrites に正規化パス (path) を追加 (出力グローバル変数)"]
     F -->|Yes| H["無視 (ローカル変数への書き込み)"]
 ```
 
