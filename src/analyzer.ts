@@ -30,6 +30,34 @@ const EXCLUDE_LIST = new Set([
     'struct', 'union', 'enum'
 ]);
 
+/** 関数引数の解析情報 */
+interface ParamInfo {
+    name: string;
+    /** 型名（アスタリスクを含まない部分） */
+    type: string;
+    /** ポインタ宣言（*）の深さ */
+    pointerDepth: number;
+    /** 配列宣言（[]）の深さ */
+    arrayDepth: number;
+    /** ポインタまたは配列（＝デレファレンスによる書き込みが可能）か */
+    isPointer: boolean;
+}
+
+/** 宣言子（declarator）の解析結果 */
+interface DeclaratorInfo {
+    /** 宣言されている識別子名（解決できなかった場合は空文字列） */
+    name: string;
+    /** ポインタ宣言（*）の深さ */
+    pointerDepth: number;
+    /** 配列宣言（[]）の深さ */
+    arrayDepth: number;
+    /**
+     * 識別子に到達する直前に通過した function_declarator。
+     * 関数宣言・関数ポインタ宣言でない場合は null になります。
+     */
+    ownerFunctionDeclarator: Parser.SyntaxNode | null;
+}
+
 /**
  * ASTノードを再帰的に走査するヘルパー関数
  */
@@ -37,6 +65,115 @@ function walk(node: Parser.SyntaxNode, callback: (node: Parser.SyntaxNode) => vo
     callback(node);
     for (let i = 0; i < node.childCount; i++) {
         walk(node.child(i)!, callback);
+    }
+}
+
+/**
+ * 宣言子（declarator）ノードを再帰的に降り、宣言されている識別子名と
+ * ポインタ・配列の深さを解決します。
+ *
+ * ポインタ宣言・配列宣言・括弧付き宣言・関数宣言のいずれの入れ子にも対応します。
+ *
+ * @param node 宣言子ノード（pointer_declarator, array_declarator, function_declarator など）
+ * @returns 識別子名とポインタ・配列の深さ、および引数リストを保持する function_declarator
+ */
+function resolveDeclarator(node: Parser.SyntaxNode): DeclaratorInfo {
+    let name = '';
+    let pointerDepth = 0;
+    let arrayDepth = 0;
+    let ownerFunctionDeclarator: Parser.SyntaxNode | null = null;
+
+    let current: Parser.SyntaxNode | null = node;
+    while (current) {
+        if (current.type === 'pointer_declarator') {
+            pointerDepth++;
+        } else if (current.type === 'array_declarator') {
+            arrayDepth++;
+        } else if (current.type === 'function_declarator') {
+            // 識別子に最も近い function_declarator が実際の引数リストを保持する
+            ownerFunctionDeclarator = current;
+        } else if (current.type === 'identifier') {
+            name = current.text;
+            break;
+        }
+
+        // parenthesized_declarator は declarator フィールドを持たないため、'(' の次の子へ進む
+        const next: Parser.SyntaxNode | null = current.type === 'parenthesized_declarator'
+            ? current.childForFieldName('declarator') || current.child(1)
+            : current.childForFieldName('declarator') || current.child(0);
+
+        // 進めない場合、および自分自身へ戻る場合は打ち切る（無限ループ防止）
+        if (!next || next.id === current.id) {
+            break;
+        }
+        current = next;
+    }
+
+    return { name, pointerDepth, arrayDepth, ownerFunctionDeclarator };
+}
+
+/**
+ * 型指定子のテキストを表示用に整えます。
+ *
+ * `struct X { ... }` のようなインライン定義を含む場合は `{` より手前の型名部分のみを取り出し、
+ * 改行や連続する空白を単一の空白へ正規化します。
+ *
+ * @param text 型指定子ノードのテキスト
+ * @returns 整形後の型名
+ */
+function cleanTypeText(text: string): string {
+    let cleaned = text.trim();
+    if (cleaned.includes('{')) {
+        cleaned = cleaned.split('{')[0].trim();
+    }
+    return cleaned.replace(/\s+/g, ' ');
+}
+
+/**
+ * declaration ノードから宣言されている変数を抽出し、名前→型のマップへ登録します。
+ *
+ * カンマ区切りの複数宣言、初期化子付き宣言、配列・多重ポインタ・関数ポインタ宣言に対応します。
+ * 関数プロトタイプ宣言（`int foo(int);`）は変数ではないため登録しません。
+ *
+ * @param declNode declaration ノード
+ * @param into 登録先のマップ（同名が既に登録されている場合は上書きしません）
+ */
+function collectDeclaredVars(declNode: Parser.SyntaxNode, into: Map<string, string>): void {
+    const typeNode = declNode.childForFieldName('type') || declNode.child(0);
+    if (!typeNode) {
+        return;
+    }
+
+    const typeText = cleanTypeText(typeNode.text);
+
+    for (let i = 0; i < declNode.childCount; i++) {
+        const child = declNode.child(i)!;
+        if (child === typeNode || child.type === ',' || child.type === ';') {
+            continue;
+        }
+
+        // init_declarator（初期化子付き宣言）の場合は declarator 部分のみを対象にする
+        let decl = child;
+        if (child.type === 'init_declarator') {
+            decl = child.childForFieldName('declarator') || child.child(0)!;
+        }
+
+        const info = resolveDeclarator(decl);
+        if (!info.name) {
+            continue;
+        }
+
+        // 関数プロトタイプ宣言（int foo(int);）は変数ではないため除外する。
+        // 関数ポインタ変数（int (*fp)(int);）はポインタ宣言を経由するため区別できる。
+        if (info.ownerFunctionDeclarator && info.pointerDepth === 0) {
+            continue;
+        }
+
+        if (into.has(info.name)) {
+            continue;
+        }
+
+        into.set(info.name, typeText + (info.pointerDepth > 0 ? '*' : ''));
     }
 }
 
@@ -57,57 +194,7 @@ export function analyzeCFunction(
     const fileScopeVars = new Map<string, string>();
     rootNode.children.forEach(node => {
         if (node.type === 'declaration') {
-            const typeNode = node.childForFieldName('type') || node.child(0);
-            if (typeNode) {
-                let typeText = typeNode.text.trim();
-                // 構造体のインライン定義（struct X { ... }）がある場合、{ より手前の定義部分のみを取り出す
-                if (typeText.includes('{')) {
-                    typeText = typeText.split('{')[0].trim();
-                }
-                for (let i = 0; i < node.childCount; i++) {
-                    const child = node.child(i)!;
-                    if (child === typeNode || child.type === ',' || child.type === ';') {
-                        continue;
-                    }
-                    
-                    let decl = child;
-                    if (child.type === 'init_declarator') {
-                        decl = child.childForFieldName('declarator') || child.child(0)!;
-                    }
-
-                    if (decl.type === 'function_declarator') {
-                        continue;
-                    }
-
-                    let varName = '';
-                    let isPtr = false;
-                    
-                    let temp = decl;
-                    while (temp) {
-                        if (temp.type === 'pointer_declarator') {
-                            isPtr = true;
-                        }
-                        if (temp.type === 'identifier') {
-                            varName = temp.text;
-                            break;
-                        }
-                        if (temp.type === 'parenthesized_declarator') {
-                            temp = temp.childForFieldName('declarator') || temp.child(1)!;
-                        } 
-                        else if (temp.type === 'array_declarator') {
-                            temp = temp.childForFieldName('declarator') || temp.child(0)!;
-                        }
-                        else {
-                            temp = temp.childForFieldName('declarator') || temp.child(0)!;
-                        }
-                    }
-                    
-                    if (varName && decl.type !== 'function_declarator') {
-                        const fullType = typeText + (isPtr ? '*' : '');
-                        fileScopeVars.set(varName, fullType);
-                    }
-                }
-            }
+            collectDeclaredVars(node, fileScopeVars);
         }
     });
 
@@ -150,27 +237,10 @@ export function analyzeCFunction(
     let functionName = 'unknown';
     let returnType = 'void';
 
-    let ptrCount = 0;
     const declaratorNode = funcNode.childForFieldName('declarator');
-    if (declaratorNode) {
-        // 関数名を取得しつつ、戻り値のポインタ深さ（アスタリスク数）をカウント
-        let nameNode = declaratorNode;
-        while (nameNode) {
-            if (nameNode.type === 'pointer_declarator') {
-                ptrCount++;
-            }
-            if (nameNode.type === 'identifier') {
-                functionName = nameNode.text;
-                break;
-            }
-            // pointer_declarator や function_declarator の中を探索
-            const childDeclarator = nameNode.childForFieldName('declarator') || nameNode.child(0);
-            if (childDeclarator) {
-                nameNode = childDeclarator;
-            } else {
-                break;
-            }
-        }
+    const declaratorInfo = declaratorNode ? resolveDeclarator(declaratorNode) : null;
+    if (declaratorInfo && declaratorInfo.name) {
+        functionName = declaratorInfo.name;
     }
 
     // 戻り値の型は、declarator以外の部分（最初のいくつかの型指定子ノード）から取得
@@ -179,61 +249,55 @@ export function analyzeCFunction(
         // 例: "int", "static void", "struct Data*" など
         // declaratorの手前までのテキストを結合して戻り値とする
         const declStart = declaratorNode ? declaratorNode.startIndex : funcNode.endIndex;
-        let rawType = funcNode.text.substring(0, declStart - funcNode.startIndex).trim();
-        // 改行や余分な空白を除去
-        rawType = rawType.replace(/\s+/g, ' ');
+        const rawType = funcNode.text
+            .substring(0, declStart - funcNode.startIndex)
+            .trim()
+            .replace(/\s+/g, ' '); // 改行や余分な空白を除去
         // ポインタのアスタリスクを型名の末尾に追加
-        returnType = rawType + '*'.repeat(ptrCount);
+        returnType = rawType + '*'.repeat(declaratorInfo ? declaratorInfo.pointerDepth : 0);
     }
 
     // 3. 引数の抽出
-    const params: { name: string; type: string; isPointer: boolean }[] = [];
-    if (declaratorNode) {
-        // parameter_list ノードを探す
-        let paramListNode: Parser.SyntaxNode | null = null;
-        walk(declaratorNode, (n) => {
-            if (n.type === 'parameter_list') {
-                paramListNode = n;
+    const params: ParamInfo[] = [];
+    // 関数名の識別子に最も近い function_declarator が、実際の引数リストを保持する。
+    // （関数ポインタを返す関数では外側の function_declarator が別の引数リストを持つため、
+    //   単純に parameter_list を探索すると誤った引数を読んでしまう）
+    const ownerFunctionDeclarator = declaratorInfo ? declaratorInfo.ownerFunctionDeclarator : null;
+    const parameterList = ownerFunctionDeclarator ? ownerFunctionDeclarator.childForFieldName('parameters') : null;
+
+    if (parameterList) {
+        for (let i = 0; i < parameterList.childCount; i++) {
+            const child = parameterList.child(i)!;
+            if (child.type !== 'parameter_declaration') {
+                continue;
             }
-        });
 
-        if (paramListNode) {
-            const list = paramListNode as Parser.SyntaxNode;
-            for (let i = 0; i < list.childCount; i++) {
-                const child = list.child(i)!;
-                if (child.type === 'parameter_declaration') {
-                    // 各引数の型と名前を抽出
-                    const typeDeclNode = child.childForFieldName('type') || child.child(0);
-                    const declNode = child.childForFieldName('declarator');
-
-                    if (typeDeclNode && declNode) {
-                        let paramName = '';
-                        let isPointer = false;
-
-                        // ポインタ宣言 (pointer_declarator) か判定しつつ名前を取得
-                        let n = declNode;
-                        while (n) {
-                            // ポインタ宣言および配列宣言をポインタ（書き込み可能）として認識
-                            if (n.type === 'pointer_declarator' || n.type === 'array_declarator') {
-                                isPointer = true;
-                            }
-                            if (n.type === 'identifier') {
-                                paramName = n.text;
-                                break;
-                            }
-                            n = n.childForFieldName('declarator') || n.child(0)!;
-                        }
-
-                        // 型テキストの抽出
-                        const typeText = child.text.substring(0, child.text.indexOf(paramName)).trim();
-                        params.push({
-                            name: paramName,
-                            type: typeText || 'int', // フォールバック
-                            isPointer
-                        });
-                    }
-                }
+            // 引数名を持たない宣言（f(void) の void など）は対象外
+            const declNode = child.childForFieldName('declarator');
+            if (!declNode) {
+                continue;
             }
+
+            const info = resolveDeclarator(declNode);
+            if (!info.name) {
+                continue;
+            }
+
+            // 型テキストは declarator の開始位置までを切り出す。
+            // （文字列検索では引数名が型名に含まれる場合、誤った位置で切れてしまう）
+            const typeText = child.text
+                .substring(0, declNode.startIndex - child.startIndex)
+                .trim()
+                .replace(/\s+/g, ' ');
+
+            params.push({
+                name: info.name,
+                type: typeText || 'int', // フォールバック
+                pointerDepth: info.pointerDepth,
+                arrayDepth: info.arrayDepth,
+                // ポインタ宣言および配列宣言をポインタ（書き込み可能）として認識
+                isPointer: info.pointerDepth > 0 || info.arrayDepth > 0
+            });
         }
     }
 
@@ -259,58 +323,7 @@ export function analyzeCFunction(
         walk(bodyNode, (node) => {
             // A. ローカル変数宣言の抽出 (declaration)
             if (node.type === 'declaration') {
-                const typeNode = node.childForFieldName('type') || node.child(0);
-                if (typeNode) {
-                    const typeText = typeNode.text;
-                    
-                    // 宣言されている識別子（変数名）をすべて取り出す（カンマ区切りの複数宣言に対応）
-                    for (let i = 0; i < node.childCount; i++) {
-                        const child = node.child(i)!;
-                        if (child === typeNode || child.type === ',' || child.type === ';') {
-                            continue;
-                        }
-                        
-                        // init_declarator の場合は、その declarator フィールドのみを対象にする
-                        let decl = child;
-                        if (child.type === 'init_declarator') {
-                            decl = child.childForFieldName('declarator') || child.child(0)!;
-                        }
-
-                        let varName = '';
-                        let isPtr = false;
-                        
-                        let temp = decl;
-                        while (temp) {
-                            if (temp.type === 'pointer_declarator') {
-                                isPtr = true;
-                            }
-                            if (temp.type === 'identifier') {
-                                varName = temp.text;
-                                break;
-                            }
-                            // 括弧付き宣言 (*var) の場合、中身の pointer_declarator などに進む
-                            if (temp.type === 'parenthesized_declarator') {
-                                temp = temp.childForFieldName('declarator') || temp.child(1)!;
-                            } 
-                            // 関数宣言 (引数リスト付き) の場合、関数名部分に進む
-                            else if (temp.type === 'function_declarator') {
-                                temp = temp.childForFieldName('declarator') || temp.child(0)!;
-                            }
-                            // 配列宣言の場合、配列名部分に進む
-                            else if (temp.type === 'array_declarator') {
-                                temp = temp.childForFieldName('declarator') || temp.child(0)!;
-                            }
-                            else {
-                                temp = temp.childForFieldName('declarator') || temp.child(0)!;
-                            }
-                        }
-                        
-                        if (varName && !localVars.has(varName)) {
-                            const fullType = typeText + (isPtr ? '*' : '');
-                            localVars.set(varName, fullType);
-                        }
-                    }
-                }
+                collectDeclaredVars(node, localVars);
             }
 
             // B. 関数呼び出しの抽出 (call_expression)
@@ -380,15 +393,15 @@ export function analyzeCFunction(
             }
         }); // walk の閉じ括弧
 
-            // 呼び出し関数リストから、ローカル変数や引数として定義されている名前（関数ポインタなど）を除外
-            calledFunctionsSet.forEach(func => {
-                const isLocal = localVars.has(func);
-                const isParam = params.some(p => p.name === func);
-                if (isLocal || isParam) {
-                    calledFunctionsSet.delete(func);
-                }
-            });
-        }
+        // 呼び出し関数リストから、ローカル変数や引数として定義されている名前（関数ポインタなど）を除外
+        calledFunctionsSet.forEach(func => {
+            const isLocal = localVars.has(func);
+            const isParam = params.some(p => p.name === func);
+            if (isLocal || isParam) {
+                calledFunctionsSet.delete(func);
+            }
+        });
+    }
 
     // 5. 解析結果を inputs / outputs / internalVariables に分類・統合
     const inputs: VariableInfo[] = [];
@@ -409,8 +422,8 @@ export function analyzeCFunction(
     // 値渡しの引数、および読み取りが行われているポインタ引数は「入力変数」
     // 書き込みが行われているポインタ引数は「出力変数」
     params.forEach(p => {
-        // すでに型テキストの末尾に '*' がある場合は重ねて付与しない
-        const fullType = p.type.endsWith('*') ? p.type : (p.type + (p.isPointer ? '*' : ''));
+        // 型名の末尾にポインタ深さ分のアスタリスクを付与する（配列はポインタ1段として扱う）
+        const fullType = p.type + '*'.repeat(p.pointerDepth + (p.arrayDepth > 0 ? 1 : 0));
 
         if (p.isPointer) {
             const matchingWrites = Array.from(pointerWrites).filter(path => getRootName(path) === p.name);
@@ -465,41 +478,40 @@ export function analyzeCFunction(
     // グローバル変数の分類
     // 書き込みが行われているものは「グローバル変数（出力）」
     // 読み取りが行われているものは「グローバル変数（入力）」
-    globalVarWrites.forEach(path => {
-        const rootName = getRootName(path);
-        if (classifyAllUppercaseAsMacros && isAllUppercase(rootName)) {
-            macroVariables.push({
-                name: path,
-                type: 'macro (推定)',
-                details: 'マクロ変数への書き込み'
-            });
-        } else {
-            const fileVarType = fileScopeVars.get(rootName);
-            outputs.push({
-                name: path,
-                type: fileVarType || 'global (推定)',
-                details: 'グローバル変数への書き込み'
-            });
-        }
-    });
+    /**
+     * グローバル変数のアクセスパス集合を、マクロ変数と通常のグローバル変数に振り分けて登録します。
+     *
+     * @param paths 対象のアクセスパス集合
+     * @param target 通常のグローバル変数の登録先（inputs または outputs）
+     * @param macroDetails マクロ変数として分類した場合の補足情報
+     * @param details 通常のグローバル変数として分類した場合の補足情報
+     */
+    const classifyGlobalVars = (
+        paths: Set<string>,
+        target: VariableInfo[],
+        macroDetails: string,
+        details: string
+    ) => {
+        paths.forEach(path => {
+            const rootName = getRootName(path);
+            if (classifyAllUppercaseAsMacros && isAllUppercase(rootName)) {
+                macroVariables.push({
+                    name: path,
+                    type: 'macro (推定)',
+                    details: macroDetails
+                });
+            } else {
+                target.push({
+                    name: path,
+                    type: fileScopeVars.get(rootName) || 'global (推定)',
+                    details
+                });
+            }
+        });
+    };
 
-    globalVarReads.forEach(path => {
-        const rootName = getRootName(path);
-        if (classifyAllUppercaseAsMacros && isAllUppercase(rootName)) {
-            macroVariables.push({
-                name: path,
-                type: 'macro (推定)',
-                details: 'マクロ変数からの読み取り'
-            });
-        } else {
-            const fileVarType = fileScopeVars.get(rootName);
-            inputs.push({
-                name: path,
-                type: fileVarType || 'global (推定)',
-                details: 'グローバル変数からの読み取り'
-            });
-        }
-    });
+    classifyGlobalVars(globalVarWrites, outputs, 'マクロ変数への書き込み', 'グローバル変数への書き込み');
+    classifyGlobalVars(globalVarReads, inputs, 'マクロ変数からの読み取り', 'グローバル変数からの読み取り');
 
     // 内部（ローカル）変数のリスト化
     const internalVariables: VariableInfo[] = [];
@@ -617,7 +629,7 @@ function resolveLhsVariable(node: Parser.SyntaxNode): { rootName: string; path: 
  */
 function checkLhsWrites(
     node: Parser.SyntaxNode,
-    params: { name: string; type: string; isPointer: boolean }[],
+    params: ParamInfo[],
     localVars: Map<string, string>,
     pointerWrites: Set<string>,
     globalVarWrites: Set<string>
