@@ -593,16 +593,18 @@ export class FunctionAnalyzerWebview {
         const doc = editor.document;
         const ranges: vscode.Range[] = [];
 
-        // C言語の識別子として一致するもののみを検索 (単語境界 \b を使用)
-        // 配列（[添字]）や構造体（.メンバ、->メンバ）への連続アクセスもあわせてマッチさせる
-        const escapedName = name.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-        const regex = new RegExp(`\\b${escapedName}(?:\\.[a-zA-Z_][a-zA-Z0-9_]*|->[a-zA-Z_][a-zA-Z0-9_]*|\\[[^\\]]+\\])*\\b`, 'g');
+        // C言語の識別子・アクセスパスとして一致するもののみを検索 (単語境界 \b を使用)
+        let pattern = name.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+        // '[]' の箇所はコード上の実際の添字 '[0]' や '[i]' などにマッチする正規表現パターンに変換
+        pattern = pattern.replace(/\\\[\\\]/g, '\\[[^\\]]+\\]');
+        const regex = new RegExp(`\\b${pattern}\\b`, 'g');
 
         for (let lineNum = startLine; lineNum <= endLine; lineNum++) {
             if (lineNum >= doc.lineCount) {
                 break;
             }
             const lineText = doc.lineAt(lineNum).text;
+            regex.lastIndex = 0;
             let match;
             while ((match = regex.exec(lineText)) !== null) {
                 const startPos = new vscode.Position(lineNum, match.index);
