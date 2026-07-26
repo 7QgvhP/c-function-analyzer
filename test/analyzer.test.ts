@@ -70,6 +70,52 @@ char *fetch(void) {
         assert.ok(r.returnType.includes('*'), `戻り値型に * が含まれること: ${r.returnType}`);
     });
 
+    test('引数名が型名に含まれる場合も型名を正しく取得する (v1.16.1)', async () => {
+        // 「struct data data」のように引数名が型名の一部と一致するケース
+        const r = await analyzeOrThrow(`
+struct data { int v; };
+
+int read_value(struct data data) {
+    return data.v;
+}
+`, 'int read_value(');
+        const p = findVar(r.inputs, 'data');
+        assert.ok(p, '入力に data が含まれること');
+        assert.equal(p.type, 'struct data');
+    });
+
+    test('関数ポインタを返す関数では本来の引数リストを採用する (v1.16.1)', async () => {
+        const r = await analyzeOrThrow(`
+void (*get_handler(int id))(char *msg) {
+    return 0;
+}
+`, 'void (*get_handler(');
+        assert.equal(r.functionName, 'get_handler');
+        assert.ok(names(r.inputs).includes('id'), `入力に id が含まれること: ${names(r.inputs)}`);
+        assert.ok(!names(r.inputs).includes('msg'), `入力に msg が含まれないこと: ${names(r.inputs)}`);
+    });
+
+    test('ポインタ・配列引数の型をアスタリスク付きで正規化する (v1.16.1)', async () => {
+        const r = await analyzeOrThrow(`
+void update(int *single, int **doubled, int arr[]) {
+    *single = 1;
+    **doubled = 2;
+    arr[0] = 3;
+}
+`, 'void update(');
+        assert.equal(findVar(r.outputs, 'single')?.type, 'int*');
+        assert.equal(findVar(r.outputs, 'doubled')?.type, 'int**');
+        assert.equal(findVar(r.outputs, 'arr[]')?.type, 'int*');
+    });
+
+    test('関数ポインタ引数の名前を解決する (v1.16.1)', async () => {
+        const r = await analyzeOrThrow(`
+void register_cb(int (*cb)(int)) {
+    (void)cb;
+}
+`, 'void register_cb(');
+        assert.ok(names(r.inputs).includes('cb'), `入力に cb が含まれること: ${names(r.inputs)}`);
+    });
 });
 
 describe('フェーズ2: カーソル位置判定', () => {
@@ -301,6 +347,31 @@ void update(void) {
         assert.ok(!g.type.includes('{'), `型名に波括弧が含まれないこと: ${g.type}`);
     });
 
+    test('ファイルスコープの関数ポインタ変数の型情報を取得する (v1.16.1)', async () => {
+        const r = await analyzeOrThrow(`
+int (*handler)(int);
+
+void reset_handler(void) {
+    handler = 0;
+}
+`, 'void reset_handler(');
+        const g = findVar(r.outputs, 'handler');
+        assert.ok(g, `出力に handler が含まれること: ${names(r.outputs)}`);
+        assert.equal(g.type, 'int*', '関数ポインタ変数として型が解決されること');
+    });
+
+    test('関数プロトタイプ宣言はグローバル変数として扱わない (v1.16.1)', async () => {
+        const r = await analyzeOrThrow(`
+int compute(int v);
+
+int run(void) {
+    return compute(1);
+}
+`, 'int run(');
+        assert.ok(!names(r.inputs).includes('compute'), `入力に compute が含まれないこと: ${names(r.inputs)}`);
+        assert.ok(r.calledFunctions.includes('compute'), `呼び出し関数に compute が含まれること: ${r.calledFunctions}`);
+    });
+
     test('除外リストの識別子 (NULL など) は入力に分類されない', async () => {
         const r = await analyzeOrThrow(`
 int check(const char *s) {
@@ -358,6 +429,23 @@ void work(void) {
         assert.ok(got.includes('argv_copy'), `内部変数に argv_copy が含まれること: ${got}`);
     });
 
+    test('ローカル変数のインライン構造体型名から波括弧を除去する (v1.16.1)', async () => {
+        const r = await analyzeOrThrow(`
+void work(void) {
+    struct Named { int x; } named;
+    struct { int y; } anonymous;
+    named.x = 1;
+    anonymous.y = 2;
+}
+`, 'void work(');
+        const named = findVar(r.internalVariables, 'named');
+        assert.ok(named, '内部変数に named が含まれること');
+        assert.equal(named.type, 'struct Named');
+
+        const anonymous = findVar(r.internalVariables, 'anonymous');
+        assert.ok(anonymous, '内部変数に anonymous が含まれること');
+        assert.ok(!anonymous.type.includes('{'), `型名に波括弧が含まれないこと: ${anonymous.type}`);
+    });
 });
 
 describe('フェーズ4: 関数呼び出しの抽出', () => {
@@ -433,32 +521,7 @@ void work(void) {
     });
 });
 
-describe('既知の不具合（段階1で修正予定）', () => {
-    test('E-1: 引数名が型名に含まれる場合も型名を正しく取得する', { todo: '型テキストを indexOf ではなくノード位置で切り出す必要がある' }, async () => {
-        const r = await analyzeOrThrow(`
-struct data { int v; };
-
-int read_value(struct data data) {
-    return data.v;
-}
-`, 'int read_value(');
-        const p = findVar(r.inputs, 'data');
-        assert.ok(p, '入力に data が含まれること');
-        assert.equal(p.type, 'struct data');
-    });
-
-    test('A-2: ローカル変数のインライン構造体型名から波括弧を除去する', { todo: 'ファイルスコープ側と同じ型名クレンジングをローカル側にも適用する必要がある' }, async () => {
-        const r = await analyzeOrThrow(`
-void work(void) {
-    struct { int x; } s;
-    s.x = 1;
-}
-`, 'void work(');
-        const v = findVar(r.internalVariables, 's');
-        assert.ok(v, '内部変数に s が含まれること');
-        assert.ok(!v.type.includes('{'), `型名に波括弧が含まれないこと: ${v.type}`);
-    });
-
+describe('既知の不具合（段階3で修正予定）', () => {
     test('C-1: 呼び出し前に参照された関数名をグローバル変数と誤分類しない', { todo: '宣言・呼び出しの収集と読み書き分類を2パスに分離する必要がある' }, async () => {
         const r = await analyzeOrThrow(`
 int helper(int x);
@@ -469,15 +532,5 @@ void work(void) {
 }
 `, 'void work(');
         assert.ok(!names(r.inputs).includes('helper'), `入力に helper が含まれないこと: ${names(r.inputs)}`);
-    });
-
-    test('C-3: 関数ポインタを返す関数では外側の引数リストを採用する', { todo: 'parameter_list を「最後に見つかったもの」ではなく外側の function_declarator から取得する必要がある' }, async () => {
-        const r = await analyzeOrThrow(`
-void (*get_handler(int id))(char *msg) {
-    return 0;
-}
-`, 'void (*get_handler(');
-        assert.ok(names(r.inputs).includes('id'), `入力に id が含まれること: ${names(r.inputs)}`);
-        assert.ok(!names(r.inputs).includes('msg'), `入力に msg が含まれないこと: ${names(r.inputs)}`);
     });
 });
