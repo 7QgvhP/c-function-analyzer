@@ -5,6 +5,11 @@ export interface VariableInfo {
     name: string;
     type: string;
     details?: string; // 補足情報（例：「値渡し引数」「ポインタ書き込み（出力）」「グローバル変数」など）
+    /**
+     * エディタ上に対応する識別子が存在し、ハイライト検索の対象になるか。
+     * 省略時は true として扱います（「戻り値 (return)」など実体のない項目のみ false）。
+     */
+    highlightable?: boolean;
 }
 
 export interface AnalysisResult {
@@ -593,7 +598,9 @@ function buildResult(
         outputs.push({
             name: '戻り値 (return)',
             type: returnType,
-            details: '関数の戻り値'
+            details: '関数の戻り値',
+            // エディタ上に対応する識別子が存在しないためハイライト対象外とする
+            highlightable: false
         });
     }
 
