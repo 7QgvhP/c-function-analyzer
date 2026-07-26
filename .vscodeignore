@@ -1,6 +1,10 @@
 .vscode/**
+.claude/**
+.gitignore
 src/**
 tsconfig.json
 scripts/**
 test.c
+test/**
+dist-test/**
 *.vsix
