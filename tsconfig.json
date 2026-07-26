@@ -4,7 +4,6 @@
     "target": "es2020",
     "lib": ["es2020"],
     "sourceMap": true,
-    "rootDir": "src",
     "strict": true,
     "noImplicitAny": true,
     "noImplicitReturns": true,
@@ -12,5 +11,6 @@
     "outDir": "dist",
     "esModuleInterop": true
   },
+  "include": ["src", "test"],
   "exclude": ["node_modules", ".vscode-test"]
 }
