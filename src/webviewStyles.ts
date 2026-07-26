@@ -193,8 +193,9 @@ export const WEBVIEW_STYLES = `
             border-radius: 4px;
             border: 1px solid rgba(255, 255, 255, 0.04);
             transition: background 0.2s ease;
-            max-width: 140px;
-            flex-shrink: 0;
+            /* 型名によらず幅を固定し、変数名の左端が縦に揃うようにする
+               （伸縮させないため flex-grow: 0 / flex-shrink: 0 / flex-basis: 140px） */
+            flex: 0 0 140px;
             box-sizing: border-box;
             text-align: center;
             white-space: nowrap;
@@ -267,8 +268,9 @@ export const WEBVIEW_STYLES = `
                 gap: 4px;
             }
             .variable-type {
+                /* 狭い幅では型名を変数名の上に折り返して表示するため、固定幅を解除する */
+                flex: 0 1 auto;
                 max-width: 100%;
-                flex-shrink: 1;
             }
             .variable-item {
                 padding: 8px 8px;
