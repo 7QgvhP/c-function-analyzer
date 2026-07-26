@@ -217,6 +217,51 @@ function collectFileScopeVars(rootNode: Parser.SyntaxNode): Map<string, string> 
 }
 
 /**
+ * フェーズ1: ファイル内で宣言・定義されている関数の名前を収集します。
+ *
+ * 関数名は変数ではないため、値として参照されているだけ（関数ポインタへの代入など）の場合に
+ * グローバル変数と誤分類しないよう、除外用の名前一覧として使用します。
+ *
+ * @param rootNode ASTのルートノード
+ * @returns 関数名の集合
+ */
+function collectFileScopeFunctions(rootNode: Parser.SyntaxNode): Set<string> {
+    const functionNames = new Set<string>();
+
+    rootNode.children.forEach(node => {
+        // 関数定義: int helper(int x) { ... }
+        if (node.type === 'function_definition') {
+            const declaratorNode = node.childForFieldName('declarator');
+            if (declaratorNode) {
+                const info = resolveDeclarator(declaratorNode);
+                if (info.name) {
+                    functionNames.add(info.name);
+                }
+            }
+            return;
+        }
+
+        // 関数プロトタイプ宣言: int helper(int x);
+        // （ポインタ深さ 0 で function_declarator を経由するものが該当する。
+        //   int (*fp)(int); のような関数ポインタ変数は pointerDepth > 0 のため対象外）
+        if (node.type === 'declaration') {
+            for (let i = 0; i < node.childCount; i++) {
+                const child = node.child(i)!;
+                if (child.type !== 'function_declarator') {
+                    continue;
+                }
+                const info = resolveDeclarator(child);
+                if (info.name && info.pointerDepth === 0) {
+                    functionNames.add(info.name);
+                }
+            }
+        }
+    });
+
+    return functionNames;
+}
+
+/**
  * フェーズ2: カーソル行にある関数定義を同定します。
  *
  * カーソル位置のノードから祖先を辿って function_definition を探すため、
@@ -338,7 +383,11 @@ function parseSignature(funcNode: Parser.SyntaxNode): SignatureInfo {
  * @param params フェーズ3で解析した引数リスト
  * @returns 収集した生データ
  */
-function analyzeBody(bodyNode: Parser.SyntaxNode | null, params: ParamInfo[]): BodyAnalysis {
+function analyzeBody(
+    bodyNode: Parser.SyntaxNode | null,
+    params: ParamInfo[],
+    fileScopeFunctions: Set<string>
+): BodyAnalysis {
     // 解析中に見つかったローカル変数、グローバル変数、呼び出し関数を格納するセット
     const localVars = new Map<string, string>(); // name -> type
     const calledFunctionsSet = new Set<string>();
@@ -354,7 +403,9 @@ function analyzeBody(bodyNode: Parser.SyntaxNode | null, params: ParamInfo[]): B
     const pointerReads = new Set<string>();
 
     if (bodyNode) {
-        // ボディ内のノードをトラバース
+        // ---- パス1: 宣言と関数呼び出しの収集 ----
+        // 読み書きの分類（パス2）はローカル変数と呼び出し関数の一覧が確定している必要があるため、
+        // 先にこれらを収集しきる。1周で行うと、識別子の出現順によって分類結果が変わってしまう。
         walk(bodyNode, (node) => {
             // A. ローカル変数宣言の抽出 (declaration)
             if (node.type === 'declaration') {
@@ -369,7 +420,19 @@ function analyzeBody(bodyNode: Parser.SyntaxNode | null, params: ParamInfo[]): B
                     calledFunctionsSet.add(funcNameNode.text);
                 }
             }
+        });
 
+        // 呼び出し関数リストから、ローカル変数や引数として定義されている名前（関数ポインタなど）を除外
+        calledFunctionsSet.forEach(func => {
+            const isLocal = localVars.has(func);
+            const isParam = params.some(p => p.name === func);
+            if (isLocal || isParam) {
+                calledFunctionsSet.delete(func);
+            }
+        });
+
+        // ---- パス2: 読み書きの分類 ----
+        walk(bodyNode, (node) => {
             // C. ポインタ書き込みおよびグローバル変数書き込みの判定 (assignment_expression / update_expressionなど)
             // 代入式: result = value など
             if (node.type === 'assignment_expression') {
@@ -385,7 +448,7 @@ function analyzeBody(bodyNode: Parser.SyntaxNode | null, params: ParamInfo[]): B
             // D. 識別子 (identifier) が出現した際の、入力（読み取り）グローバル変数の候補判定
             if (node.type === 'identifier') {
                 const name = node.text;
-                
+
                 // 親ノードがメンバアクセスの右側（例: data.member の member）や、関数宣言名、変数宣言の場合はスキップ
                 const parent = node.parent;
                 let isFieldOrDeclaration = false;
@@ -412,12 +475,16 @@ function analyzeBody(bodyNode: Parser.SyntaxNode | null, params: ParamInfo[]): B
                         }
                     }
 
-                    // 引数、ローカル変数、呼び出し関数、ブラックリストのいずれにも属さない場合
+                    // 引数、ローカル変数、呼び出し関数、ファイル内で宣言された関数、
+                    // ブラックリストのいずれにも属さない場合
                     const isParam = targetParam !== undefined;
                     const isLocal = localVars.has(rootName);
                     const isCall = calledFunctionsSet.has(rootName);
-                    
-                    if (!isParam && !isLocal && !isCall && !EXCLUDE_LIST.has(rootName)) {
+                    // 関数名を値として参照しているだけ（関数ポインタへの代入など）のケース。
+                    // 呼び出してはいないが変数でもないため、グローバル変数として扱わない。
+                    const isFunction = fileScopeFunctions.has(rootName);
+
+                    if (!isParam && !isLocal && !isCall && !isFunction && !EXCLUDE_LIST.has(rootName)) {
                         // 読み取り（右辺等）で出現しているかチェック
                         // 代入式の左辺として既に書き込み判定されていなければ、読み取り（入力）とみなす
                         if (!isLhsNode(node)) {
@@ -425,15 +492,6 @@ function analyzeBody(bodyNode: Parser.SyntaxNode | null, params: ParamInfo[]): B
                         }
                     }
                 }
-            }
-        }); // walk の閉じ括弧
-
-        // 呼び出し関数リストから、ローカル変数や引数として定義されている名前（関数ポインタなど）を除外
-        calledFunctionsSet.forEach(func => {
-            const isLocal = localVars.has(func);
-            const isParam = params.some(p => p.name === func);
-            if (isLocal || isParam) {
-                calledFunctionsSet.delete(func);
             }
         });
     }
@@ -620,6 +678,7 @@ export function analyzeCFunction(
     const rootNode = tree.rootNode;
 
     const fileScopeVars = collectFileScopeVars(rootNode);
+    const fileScopeFunctions = collectFileScopeFunctions(rootNode);
 
     const funcNode = findFunctionAtCursor(rootNode, cursorLine);
     if (!funcNode) {
@@ -627,7 +686,7 @@ export function analyzeCFunction(
     }
 
     const signature = parseSignature(funcNode);
-    const body = analyzeBody(funcNode.childForFieldName('body'), signature.params);
+    const body = analyzeBody(funcNode.childForFieldName('body'), signature.params, fileScopeFunctions);
 
     return buildResult(funcNode, signature, body, fileScopeVars, classifyAllUppercaseAsMacros);
 }

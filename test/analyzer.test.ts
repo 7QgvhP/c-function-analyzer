@@ -558,8 +558,25 @@ void work(void) {
     });
 });
 
-describe('既知の不具合（段階3で修正予定）', () => {
-    test('C-1: 呼び出し前に参照された関数名をグローバル変数と誤分類しない', { todo: '宣言・呼び出しの収集と読み書き分類を2パスに分離する必要がある' }, async () => {
+describe('フェーズ4: 走査順序に依存しない分類', () => {
+    test('呼び出しより前に参照された関数名を入力に重複させない', async () => {
+        // 識別子 helper が call_expression より先に出現するケース。
+        // 単一パス走査では「まだ呼び出しとして登録されていない」ため誤って入力に分類されていた。
+        const r = await analyzeOrThrow(`
+void helper(void);
+
+void work(void) {
+    void (*p)(void) = helper;
+    helper();
+}
+`, 'void work(');
+        assert.ok(r.calledFunctions.includes('helper'), `呼び出し関数に helper が含まれること: ${r.calledFunctions}`);
+        assert.ok(!names(r.inputs).includes('helper'), `入力に helper が含まれないこと: ${names(r.inputs)}`);
+    });
+
+    test('参照されるだけで呼び出されない関数名をグローバル変数と誤分類しない', async () => {
+        // helper は値として参照されるのみで呼び出されない。
+        // 関数名は変数ではないため、グローバル変数の読み取りとして扱ってはならない。
         const r = await analyzeOrThrow(`
 int helper(int x);
 
@@ -569,5 +586,34 @@ void work(void) {
 }
 `, 'void work(');
         assert.ok(!names(r.inputs).includes('helper'), `入力に helper が含まれないこと: ${names(r.inputs)}`);
+    });
+
+    test('同一ファイル内で定義された関数の参照も誤分類しない', async () => {
+        // プロトタイプ宣言ではなく関数定義として存在するケース
+        const r = await analyzeOrThrow(`
+int helper(int x) {
+    return x;
+}
+
+void work(void) {
+    int (*fp)(int) = helper;
+    int result = fp(1);
+}
+`, 'void work(');
+        assert.ok(!names(r.inputs).includes('helper'), `入力に helper が含まれないこと: ${names(r.inputs)}`);
+    });
+
+    test('ローカル変数の宣言より前に同名の識別子が出現しても入力に分類しない', async () => {
+        // 宣言と使用の収集がパス1で完了しているため、出現順の影響を受けない
+        const r = await analyzeOrThrow(`
+int compute(int v);
+
+void work(void) {
+    int total = compute(1);
+    total = total + 1;
+}
+`, 'void work(');
+        assert.ok(!names(r.inputs).includes('total'), `入力に total が含まれないこと: ${names(r.inputs)}`);
+        assert.ok(names(r.internalVariables).includes('total'), '内部変数に total が含まれること');
     });
 });
