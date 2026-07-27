@@ -98,7 +98,7 @@ void bump(void) {
         assert.equal(g.definition.line, 1, 'コメント行の次（0始まりで1行目）を指すこと');
     });
 
-    test('構造体型のグローバル変数も型名が解決される', async () => {
+    test('構造体型のグローバル変数のメンバ型が解決される', async () => {
         const { result } = await analyzeWithIncludes(`#include "types.h"
 
 void setup(void) {
@@ -110,7 +110,26 @@ void setup(void) {
 
         const g = findVar(result.outputs, 'g_config.mode');
         assert.ok(g, `出力に g_config.mode が含まれること: ${names(result.outputs)}`);
-        assert.equal(g.type, 'struct Config');
+        assert.equal(g.type, 'int', 'メンバ mode の型が解決されること');
+    });
+
+    test('インクルードファイル内の構造体定義からメンバ型を解決する', async () => {
+        // 構造体定義はヘッダ側にあるのが一般的なため、探索結果からも引けること
+        const { result } = await analyzeWithIncludes(`#include "types.h"
+
+void setup(void) {
+    g_config.ratio = 1.5;
+    g_config.name[0] = 'a';
+}
+`, 'void setup(', {
+            'types.h': `struct Config { int mode; float ratio; char name[8]; };
+extern struct Config g_config;
+`
+        });
+
+        assert.equal(findVar(result.outputs, 'g_config.ratio')?.type, 'float');
+        assert.equal(findVar(result.outputs, 'g_config.name[8]')?.type, 'char',
+            `配列メンバは名前側に次元が出ること: ${names(result.outputs)}`);
     });
 
     test('解析対象ファイル自身の宣言をインクルード側より優先する', async () => {

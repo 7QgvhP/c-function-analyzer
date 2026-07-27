@@ -118,6 +118,9 @@ interface MacroDefinition {
     definition: DefinitionLocation;
 }
 
+/** 構造体・共用体のメンバ一覧（メンバ名 → 型情報） */
+type StructMembers = Map<string, DeclaredVar>;
+
 /**
  * フェーズ1で収集したファイルスコープのシンボル情報です。
  * 解析対象ファイル自身とインクルードファイルの内容がマージされます。
@@ -129,6 +132,11 @@ interface FileScopeSymbols {
     functions: Map<string, DefinitionLocation>;
     /** マクロ（名前 → 定義値と定義位置） */
     macros: Map<string, MacroDefinition>;
+    /**
+     * 構造体・共用体の定義（型名 → メンバ一覧）。
+     * タグ名（`struct Config`）と typedef 名（`HogeStruct`）の双方で引けるよう登録します。
+     */
+    structs: Map<string, StructMembers>;
 }
 
 /** インクルードを辿る深さの上限（循環や過剰な探索を防ぐ） */
@@ -274,7 +282,8 @@ function resolveDeclarator(node: Parser.SyntaxNode, filePath?: string): Declarat
         } else if (current.type === 'function_declarator') {
             // 識別子に最も近い function_declarator が実際の引数リストを保持する
             ownerFunctionDeclarator = current;
-        } else if (current.type === 'identifier') {
+        } else if (current.type === 'identifier' || current.type === 'field_identifier') {
+            // field_identifier は構造体・共用体のメンバ宣言における識別子
             name = current.text;
             position = toDefinitionLocation(current, filePath);
             break;
@@ -310,26 +319,103 @@ function formatArrayType(baseType: string, dimensions: string[]): string {
 }
 
 /**
- * アクセスパス中の正規化された添字 `[]` を、宣言された配列の次元で置き換えます。
+ * アクセスパスの1セグメント内にある正規化された添字 `[]` を、宣言された次元で置き換えます。
  *
- * 例: `hoge[]` と宣言 `int hoge[N]` から `hoge[N]`、
- *     `tbl[].id` と宣言 `HOGESTRUCT tbl[5]` から `tbl[5].id` を生成します。
- * 宣言の次元が不明な場合や、パスの添字数が次元数を超える場合は `[]` のままとします。
- *
- * @param accessPath アクセスパス（例: `hoge[]`、`grid[][]`、`tbl[].id`）
+ * @param segment アクセスパスのセグメント（例: `hoge[]`、`grid[][]`）
  * @param dimensions 宣言された配列の各次元のサイズ
- * @returns 次元を反映したアクセスパス
+ * @returns 次元を反映したセグメント
  */
-function applyArrayDimensions(accessPath: string, dimensions: string[]): string {
+function substituteSubscripts(segment: string, dimensions: string[]): string {
     if (dimensions.length === 0) {
-        return accessPath;
+        return segment;
     }
     let index = 0;
-    return accessPath.replace(/\[\]/g, () => {
+    return segment.replace(/\[\]/g, () => {
         const size = index < dimensions.length ? dimensions[index] : '';
         index++;
         return `[${size}]`;
     });
+}
+
+/**
+ * 型名から構造体定義を引くためのキーを作ります（末尾のポインタ表記を除去します）。
+ *
+ * @param type 型名（例: `struct Outer*`、`HogeStruct`）
+ * @returns 構造体定義の検索キー（例: `struct Outer`、`HogeStruct`）
+ */
+function normalizeStructKey(type: string): string {
+    return type.replace(/\*+$/, '').trim();
+}
+
+/** アクセスパスの解決結果 */
+interface ResolvedAccessPath {
+    /** 表示用の名前（各セグメントの添字に宣言された次元を反映したもの） */
+    name: string;
+    /** 表示用の型名 */
+    type: string;
+}
+
+/**
+ * アクセスパスを解析し、表示用の名前と型を解決します。
+ *
+ * 構造体・共用体のメンバアクセスを辿り、**最終的に参照しているメンバの型**を返します。
+ * 例: `tbl[].id`（`HogeStruct tbl[5]`、`HogeStruct` に `int id`）は
+ *     名前 `tbl[5].id`、型 `int` に解決されます。
+ *
+ * 構造体定義やメンバが見つからない場合は、根元の変数の型をそのまま用います
+ * （無理に解決するより、根元の型が見えている方が手がかりになるため）。
+ *
+ * @param accessPath アクセスパス（例: `hoge[]`、`tbl[].id`、`var_ptr->sub.member`）
+ * @param rootVar 根元の変数の型情報
+ * @param structs 構造体・共用体の定義
+ * @returns 表示用の名前と型
+ */
+function resolveAccessPath(
+    accessPath: string,
+    rootVar: { type: string; arrayDimensions: string[] },
+    structs: Map<string, StructMembers>
+): ResolvedAccessPath {
+    // 区切り文字（. と ->）を保持したまま分割する
+    const parts = accessPath.split(/(\.|->)/);
+
+    let current: { type: string; arrayDimensions: string[] } = rootVar;
+    let name = substituteSubscripts(parts[0], current.arrayDimensions);
+    let lastSegment = parts[0];
+    let resolved = true;
+
+    for (let i = 1; i < parts.length; i += 2) {
+        const separator = parts[i];
+        const segment = parts[i + 1];
+        if (segment === undefined) {
+            break;
+        }
+        lastSegment = segment;
+
+        // 添字を除いた部分がメンバ名
+        const memberName = segment.replace(/\[[^\]]*\]/g, '');
+        const members = resolved ? structs.get(normalizeStructKey(current.type)) : undefined;
+        const member = members ? members.get(memberName) : undefined;
+
+        if (member) {
+            current = member;
+            name += separator + substituteSubscripts(segment, member.arrayDimensions);
+        } else {
+            // 解決できない場合は表記をそのまま残し、以降の型解決も打ち切る
+            resolved = false;
+            name += separator + segment;
+        }
+    }
+
+    // 型の決定に用いる変数（解決できた場合は最終メンバ、できなければ根元）
+    const target = resolved ? current : rootVar;
+    // 配列の次元は名前と型のどちらか一方にのみ出す。
+    // 末尾セグメントが添字を伴う場合は名前側に出ているため、型には付けない。
+    const lastHasSubscript = /\[[^\]]*\]/.test(lastSegment);
+    const type = lastHasSubscript
+        ? target.type
+        : formatArrayType(target.type, target.arrayDimensions);
+
+    return { name, type };
 }
 
 /**
@@ -513,6 +599,108 @@ function collectMacros(
 }
 
 /**
+ * 構造体・共用体のメンバ一覧を収集します。
+ *
+ * @param bodyNode field_declaration_list ノード
+ * @param filePath インクルードファイルの場合はそのパス
+ * @returns メンバ名 → 型情報 のマップ
+ */
+function collectStructMembers(bodyNode: Parser.SyntaxNode, filePath?: string): StructMembers {
+    const members: StructMembers = new Map();
+    for (let i = 0; i < bodyNode.childCount; i++) {
+        const child = bodyNode.child(i)!;
+        if (child.type === 'field_declaration') {
+            // field_declaration は declaration と同じ構造（type + declarator）のため共通処理を使う
+            collectDeclaredVars(child, members, filePath);
+        }
+    }
+    return members;
+}
+
+/**
+ * type_definition（typedef）から型名を取り出します。
+ *
+ * @param typedefNode type_definition ノード
+ * @returns typedef で付けられた型名。取得できない場合は空文字列
+ */
+function resolveTypedefName(typedefNode: Parser.SyntaxNode): string {
+    let current: Parser.SyntaxNode | null = typedefNode.childForFieldName('declarator');
+    while (current) {
+        if (current.type === 'type_identifier') {
+            return current.text;
+        }
+        const next: Parser.SyntaxNode | null =
+            current.childForFieldName('declarator') || current.child(0);
+        if (!next || next.id === current.id) {
+            break;
+        }
+        current = next;
+    }
+    return '';
+}
+
+/**
+ * フェーズ1: 構造体・共用体の定義を収集します。
+ *
+ * タグ名（`struct Config`）と typedef 名（`HogeStruct`）の双方をキーとして登録し、
+ * どちらの表記からもメンバを引けるようにします。関数ボディ内のローカルな型定義は対象外です。
+ *
+ * @param rootNode ASTのルートノード
+ * @param filePath インクルードファイルの場合はそのパス
+ * @returns 型名 → メンバ一覧 のマップ
+ */
+function collectStructDefinitions(
+    rootNode: Parser.SyntaxNode,
+    filePath?: string
+): Map<string, StructMembers> {
+    const structs = new Map<string, StructMembers>();
+
+    forEachFileScopeNode(rootNode, node => {
+        // 関数ボディ内で定義されたローカルな型は対象外とする
+        if (node.type === 'function_definition') {
+            return;
+        }
+
+        walk(node, inner => {
+            if (inner.type !== 'struct_specifier' && inner.type !== 'union_specifier') {
+                return;
+            }
+            // body を持たないもの（struct Sub sub; のような型参照）は定義ではない
+            const bodyNode = inner.childForFieldName('body');
+            if (!bodyNode) {
+                return;
+            }
+
+            const members = collectStructMembers(bodyNode, filePath);
+            if (members.size === 0) {
+                return;
+            }
+
+            // タグ名がある場合は「struct Tag」「union Tag」として登録する
+            const nameNode = inner.childForFieldName('name');
+            if (nameNode) {
+                const keyword = inner.type === 'union_specifier' ? 'union' : 'struct';
+                const tagKey = `${keyword} ${nameNode.text}`;
+                if (!structs.has(tagKey)) {
+                    structs.set(tagKey, members);
+                }
+            }
+
+            // typedef の場合は付けられた型名でも引けるようにする
+            const parent = inner.parent;
+            if (parent && parent.type === 'type_definition') {
+                const typedefName = resolveTypedefName(parent);
+                if (typedefName && !structs.has(typedefName)) {
+                    structs.set(typedefName, members);
+                }
+            }
+        });
+    });
+
+    return structs;
+}
+
+/**
  * フェーズ1: 1つのファイルからファイルスコープのシンボル（変数・関数・マクロ）を収集します。
  *
  * @param rootNode ASTのルートノード
@@ -526,7 +714,8 @@ function collectFileScopeSymbols(
     return {
         vars: collectFileScopeVars(rootNode, filePath),
         functions: collectFileScopeFunctions(rootNode, filePath),
-        macros: collectMacros(rootNode, filePath)
+        macros: collectMacros(rootNode, filePath),
+        structs: collectStructDefinitions(rootNode, filePath)
     };
 }
 
@@ -553,6 +742,11 @@ function mergeSymbols(into: FileScopeSymbols, from: FileScopeSymbols): void {
     from.macros.forEach((value, key) => {
         if (!into.macros.has(key)) {
             into.macros.set(key, value);
+        }
+    });
+    from.structs.forEach((value, key) => {
+        if (!into.structs.has(key)) {
+            into.structs.set(key, value);
         }
     });
 }
@@ -942,11 +1136,15 @@ function buildResult(
             const matchingWrites = Array.from(pointerWrites).filter(path => getRootName(path) === p.name);
             const matchingReads = Array.from(pointerReads).filter(path => getRootName(path) === p.name);
 
+            // 引数の配列はポインタへ減衰するため、次元は型名の '*' で表現済み（次元リストは空）
+            const paramVar = { type: fullType, arrayDimensions: [] as string[] };
+
             if (matchingWrites.length > 0) {
                 matchingWrites.forEach(path => {
+                    const resolvedPath = resolveAccessPath(path, paramVar, symbols.structs);
                     outputs.push({
-                        name: path,
-                        type: fullType,
+                        name: resolvedPath.name,
+                        type: resolvedPath.type,
                         details: '出力引数（ポインタ書き込みあり）',
                         definition: p.definition
                     });
@@ -955,9 +1153,10 @@ function buildResult(
 
             if (matchingReads.length > 0) {
                 matchingReads.forEach(path => {
+                    const resolvedPath = resolveAccessPath(path, paramVar, symbols.structs);
                     inputs.push({
-                        name: path,
-                        type: fullType,
+                        name: resolvedPath.name,
+                        type: resolvedPath.type,
                         details: '入力引数（ポインタ読み取りあり）',
                         definition: p.definition
                     });
@@ -1026,21 +1225,19 @@ function buildResult(
                 macroVariables.push(entry);
             } else {
                 const declared = symbols.vars.get(rootName);
-                // 配列の次元は名前か型名のどちらか一方にのみ表示する。
-                // 添字でアクセスされている場合は名前側（hoge[N]）へ、
-                // 添字なしで参照されている場合は型名側（int[N]）へ出す。
-                const hasSubscript = path.includes('[]');
-                const entry: VariableInfo = {
-                    name: declared ? applyArrayDimensions(path, declared.arrayDimensions) : path,
-                    type: declared
-                        ? (hasSubscript ? declared.type : formatArrayType(declared.type, declared.arrayDimensions))
-                        : 'global (推定)',
-                    details
-                };
                 if (declared) {
-                    entry.definition = declared.definition;
+                    // 構造体メンバのアクセスを辿って型を解決し、
+                    // 配列の次元は名前と型のどちらか一方にのみ表示する
+                    const resolvedPath = resolveAccessPath(path, declared, symbols.structs);
+                    target.push({
+                        name: resolvedPath.name,
+                        type: resolvedPath.type,
+                        details,
+                        definition: declared.definition
+                    });
+                } else {
+                    target.push({ name: path, type: 'global (推定)', details });
                 }
-                target.push(entry);
             }
         });
     };
