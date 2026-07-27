@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import Parser = require('web-tree-sitter');
 import { analyzeCFunction } from './analyzer';
+import { FileIncludeResolver } from './includeResolver';
 import { FunctionAnalyzerWebview } from './webview';
 
 /**
@@ -34,6 +35,10 @@ export async function activate(context: vscode.ExtensionContext) {
         return;
     }
 
+    // インクルードファイルの解決を担うリゾルバ（パース結果をキャッシュするため使い回す）
+    const includeResolver = new FileIncludeResolver(parser);
+    context.subscriptions.push({ dispose: () => includeResolver.dispose() });
+
     // 2. コマンド 'c-function-analyzer.analyze' の登録
     const disposable = vscode.commands.registerCommand('c-function-analyzer.analyze', () => {
         const editor = vscode.window.activeTextEditor;
@@ -60,8 +65,11 @@ export async function activate(context: vscode.ExtensionContext) {
             const config = vscode.workspace.getConfiguration('c-function-analyzer');
             const classifyAllUppercaseAsMacros = config.get<boolean>('classifyAllUppercaseAsMacros', true);
 
-            // C言語関数の簡易解析を実行
-            const result = analyzeCFunction(tree, cursorLine, classifyAllUppercaseAsMacros);
+            // C言語関数の簡易解析を実行（インクルードファイルも辿って型と定義位置を解決する）
+            const result = analyzeCFunction(tree, cursorLine, classifyAllUppercaseAsMacros, {
+                includeResolver,
+                currentFilePath: document.uri.toString()
+            });
 
             if (!result) {
                 // 関数定義の関数名や引数宣言がある行以外で実行された場合はインフォメーションを表示
