@@ -68,6 +68,29 @@ int prototype(int);                  // 関数プロトタイプ宣言のため�
 
 なお、変数宣言のスキャン処理（`collectDeclaredVars`）はファイルスコープとローカル変数で共通化されており、カンマ区切りの複数宣言・初期化子付き宣言・配列・多重ポインタ・関数ポインタ宣言に対応します。
 
+### 型名の表記ルール
+
+宣言された変数（グローバル変数・ローカル変数）は、**宣言された型をそのまま**表記します。
+
+| 宣言 | 型名の表示 |
+|---|---|
+| `int plain` | `int` |
+| `int *ptr` | `int*` |
+| `int hoge_array[5]` | `int[5]` |
+| `int grid[3][4]` | `int[3][4]` |
+| `char buf[]` | `char[]` |
+| `char sized[MAX_LEN]` | `char[MAX_LEN]` |
+| `int *ptrs[8]` | `int*[8]` |
+
+一方、**引数の配列はポインタ表記（`int*`）**とします。C言語の仕様上、引数の配列はポインタへ減衰するためです。
+
+```c
+void f(int param_arr[5])   // 型は int*  （減衰するため）
+int  local_arr[5];         // 型は int[5]（減衰しない）
+```
+
+なお、配列であることを示す `[]` は**型名側にのみ**置きます。名前フィールドはハイライト検索の正規表現とコピー対象を兼ねる機能的なフィールドであり、そこに宣言由来の `[]` を含めると、添字を伴わない参照（`memcpy(dst, arr, n)` や `sizeof(arr)`）がハイライトから漏れるためです。名前側に現れる `[]` は、あくまで**アクセスパス**（添字でアクセスされたこと）を表します。
+
 ### ファイルスコープの走査範囲 (`forEachFileScopeNode`)
 
 宣言の走査は、AST ルート直下だけでなく**プリプロセッサ条件ブロックの内側も透過的に降りて**行います（`preproc_ifdef` / `preproc_if` / `preproc_elif` / `preproc_else`）。関数ボディの内側には入りません。
@@ -160,6 +183,7 @@ export interface IncludeResolver {
 | `name` | 宣言されている識別子名 |
 | `pointerDepth` | ポインタ宣言（`*`）の深さ |
 | `arrayDepth` | 配列宣言（`[]`）の深さ |
+| `arraySuffix` | 配列の次元を表す型名の接尾辞（`[5]`、`[3][4]`、`[]` など） |
 | `ownerFunctionDeclarator` | 識別子に最も近い `function_declarator` |
 
 `pointer_declarator` / `array_declarator` / `parenthesized_declarator` / `function_declarator` のいずれの入れ子にも対応します（`parenthesized_declarator` は `declarator` フィールドを持たないため、`(` の次の子へ進みます）。

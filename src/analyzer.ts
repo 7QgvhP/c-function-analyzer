@@ -167,6 +167,11 @@ interface DeclaratorInfo {
     /** 配列宣言（[]）の深さ */
     arrayDepth: number;
     /**
+     * 配列の次元を表す型名の接尾辞（例: `[5]`、`[3][4]`、`[]`）。
+     * 配列でない場合は空文字列です。
+     */
+    arraySuffix: string;
+    /**
      * 識別子に到達する直前に通過した function_declarator。
      * 関数宣言・関数ポインタ宣言でない場合は null になります。
      */
@@ -252,6 +257,8 @@ function resolveDeclarator(node: Parser.SyntaxNode, filePath?: string): Declarat
     let arrayDepth = 0;
     let ownerFunctionDeclarator: Parser.SyntaxNode | null = null;
     let position: DefinitionLocation | null = null;
+    // 配列の各次元のサイズ。外側の次元から順に見つかるため、最後に反転して並べ直す
+    const arrayDimensions: string[] = [];
 
     let current: Parser.SyntaxNode | null = node;
     while (current) {
@@ -259,6 +266,9 @@ function resolveDeclarator(node: Parser.SyntaxNode, filePath?: string): Declarat
             pointerDepth++;
         } else if (current.type === 'array_declarator') {
             arrayDepth++;
+            // サイズ指定がない宣言（int buf[]）では size フィールドを持たない
+            const sizeNode = current.childForFieldName('size');
+            arrayDimensions.push(sizeNode ? sizeNode.text.replace(/\s+/g, ' ').trim() : '');
         } else if (current.type === 'function_declarator') {
             // 識別子に最も近い function_declarator が実際の引数リストを保持する
             ownerFunctionDeclarator = current;
@@ -280,7 +290,13 @@ function resolveDeclarator(node: Parser.SyntaxNode, filePath?: string): Declarat
         current = next;
     }
 
-    return { name, pointerDepth, arrayDepth, ownerFunctionDeclarator, position };
+    // 内側の次元から順に並べ直して型名の接尾辞にする（int grid[3][4] → "[3][4]"）
+    const arraySuffix = arrayDimensions
+        .reverse()
+        .map(size => `[${size}]`)
+        .join('');
+
+    return { name, pointerDepth, arrayDepth, arraySuffix, ownerFunctionDeclarator, position };
 }
 
 /**
@@ -349,8 +365,10 @@ function collectDeclaredVars(
             continue;
         }
 
+        // 宣言された型をそのまま表す（例: int / int* / int[5] / int[3][4] / int*[8]）。
+        // 引数の配列は C の仕様上ポインタへ減衰するため、引数側は別途 '*' 表記としている。
         into.set(info.name, {
-            type: typeText + (info.pointerDepth > 0 ? '*' : ''),
+            type: typeText + (info.pointerDepth > 0 ? '*' : '') + info.arraySuffix,
             definition: info.position
         });
     }
