@@ -384,6 +384,29 @@ void update(void) {
         assert.ok(!g.type.includes('{'), `型名に波括弧が含まれないこと: ${g.type}`);
     });
 
+    test('グローバル配列の型にも次元とサイズを表示する (v2.2.1)', async () => {
+        const r = await analyzeOrThrow(`
+int global_arr[10];
+
+void fill(void) {
+    global_arr[0] = 5;
+}
+`, 'void fill(');
+        const g = findVar(r.outputs, 'global_arr[]');
+        assert.ok(g, `出力に global_arr[] が含まれること: ${names(r.outputs)}`);
+        assert.equal(g.type, 'int[10]');
+    });
+
+    test('引数の配列はポインタ表記のままとする (v2.2.1)', async () => {
+        // 引数の配列は C の仕様上ポインタへ減衰するため、宣言変数とは表記を分ける
+        const r = await analyzeOrThrow(`
+void fill(int param_arr[5]) {
+    param_arr[0] = 1;
+}
+`, 'void fill(');
+        assert.equal(findVar(r.outputs, 'param_arr[]')?.type, 'int*', '角括弧ではなくアスタリスク表記であること');
+    });
+
     test('ファイルスコープの関数ポインタ変数の型情報を取得する (v1.16.1)', async () => {
         const r = await analyzeOrThrow(`
 int (*handler)(int);
@@ -464,6 +487,27 @@ void work(void) {
         const got = names(r.internalVariables);
         assert.ok(got.includes('buf'), `内部変数に buf が含まれること: ${got}`);
         assert.ok(got.includes('argv_copy'), `内部変数に argv_copy が含まれること: ${got}`);
+    });
+
+    test('配列宣言の型に次元とサイズを表示する (v2.2.1)', async () => {
+        const r = await analyzeOrThrow(`
+#define MAX_LEN 32
+
+void work(void) {
+    int hoge_array[5] = {0};
+    int grid[3][4];
+    char buf[] = "x";
+    char sized[MAX_LEN];
+    int *ptrs[8];
+    int plain;
+}
+`, 'void work(');
+        assert.equal(findVar(r.internalVariables, 'hoge_array')?.type, 'int[5]');
+        assert.equal(findVar(r.internalVariables, 'grid')?.type, 'int[3][4]', '多次元は宣言と同じ順序で並ぶこと');
+        assert.equal(findVar(r.internalVariables, 'buf')?.type, 'char[]', 'サイズ省略時は空の角括弧とすること');
+        assert.equal(findVar(r.internalVariables, 'sized')?.type, 'char[MAX_LEN]', 'マクロ定数のサイズもそのまま表示すること');
+        assert.equal(findVar(r.internalVariables, 'ptrs')?.type, 'int*[8]', 'ポインタ配列はアスタリスクと角括弧の両方が付くこと');
+        assert.equal(findVar(r.internalVariables, 'plain')?.type, 'int', '配列でない変数には角括弧を付けないこと');
     });
 
     test('ローカル変数のインライン構造体型名から波括弧を除去する (v1.16.1)', async () => {
