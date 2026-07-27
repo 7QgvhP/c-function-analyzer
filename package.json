@@ -4,6 +4,10 @@
   "description": "C言語の選択された関数を簡易解析し、入出力変数や呼び出し関数を別ウィンドウに表示します。",
   "version": "2.5.0",
   "publisher": "antigravity",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/7QgvhP/c-function-analyzer.git"
+  },
   "engines": {
     "vscode": "^1.74.0"
   },
