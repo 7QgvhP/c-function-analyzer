@@ -135,11 +135,19 @@ function renderCalledFunctions(funcs: FunctionInfo[]): string {
  * @returns 生成したHTML
  */
 function renderSection(modifier: string, title: string, count: number, body: string): string {
+    // 対象が1件以上ある場合のみ一括コピーボタンを表示する
+    const copyButton = count > 0
+        ? '<button class="section-copy-button" title="この分類の名前をまとめてコピー">コピー</button>'
+        : '';
+
     return `
         <div class="section-container ${modifier}">
             <h2 class="section-title">
                 <span class="section-title-text">${title}</span>
-                <span class="section-count">${count}</span>
+                <span class="section-actions">
+                    <span class="section-count">${count}</span>
+                    ${copyButton}
+                </span>
             </h2>
             <div class="variable-list">
                 ${body}
@@ -210,6 +218,32 @@ ${macroFunctions.length > 0 ? renderSection('macro-fn', 'マクロ関数', macro
                 if (name) {
                     vscode.postMessage({ command: 'highlightVariable', name: name });
                 }
+            });
+        });
+
+        // 分類ごとの一括コピー処理
+        document.querySelectorAll('.section-copy-button').forEach(button => {
+            button.addEventListener('click', () => {
+                const container = button.closest('.section-container');
+                if (!container) {
+                    return;
+                }
+                const names = Array.from(container.querySelectorAll('.variable-item'))
+                    .map(item => item.getAttribute('data-name'))
+                    .filter(name => name);
+                if (names.length === 0) {
+                    return;
+                }
+
+                // 表計算ソフトへ貼り付けた際に1行1件となるよう改行で区切る
+                vscode.postMessage({ command: 'copyText', text: names.join('\\n') });
+
+                button.textContent = "完了";
+                button.classList.add('copied');
+                setTimeout(() => {
+                    button.textContent = "コピー";
+                    button.classList.remove('copied');
+                }, 1000);
             });
         });
 

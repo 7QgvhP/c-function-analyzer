@@ -133,6 +133,41 @@ export const WEBVIEW_STYLES = `
             flex-shrink: 0;
         }
 
+        /* 見出し右側の操作領域（件数バッジと一括コピーボタン） */
+        .section-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        /* 分類ごとの一括コピーボタン（件数バッジの右に常時表示） */
+        .section-copy-button {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            color: var(--text-muted);
+            padding: 2px 8px;
+            font-size: 0.7rem;
+            font-weight: 400;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            flex-shrink: 0;
+            white-space: nowrap;
+        }
+
+        .section-copy-button:hover {
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--vscode-editor-foreground, #ffffff);
+            border-color: rgba(255, 255, 255, 0.15);
+        }
+
+        .section-copy-button.copied {
+            background: var(--vscode-button-background, #007acc);
+            color: var(--vscode-button-foreground, #ffffff);
+            border-color: transparent;
+        }
+
         /* 変数行リスト */
         .variable-list {
             display: flex;
