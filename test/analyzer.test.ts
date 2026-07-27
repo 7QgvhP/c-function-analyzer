@@ -755,6 +755,183 @@ int work(void) {
     });
 });
 
+describe('フェーズ5: 構造体メンバの型解決', () => {
+    test('名前付き構造体のメンバ型を解決する', async () => {
+        const r = await analyzeOrThrow(`
+struct Config { int mode; float ratio; };
+struct Config g_config;
+
+void setup(void) {
+    g_config.mode = 1;
+    g_config.ratio = 0.5;
+}
+`, 'void setup(');
+        assert.equal(findVar(r.outputs, 'g_config.mode')?.type, 'int');
+        assert.equal(findVar(r.outputs, 'g_config.ratio')?.type, 'float');
+    });
+
+    test('無名構造体の typedef のメンバ型を解決する', async () => {
+        const r = await analyzeOrThrow(`
+typedef struct { int id; float score; } HogeStruct;
+HogeStruct hoge_data;
+
+void setup(void) {
+    hoge_data.id = 1;
+    hoge_data.score = 2.0;
+}
+`, 'void setup(');
+        assert.equal(findVar(r.outputs, 'hoge_data.id')?.type, 'int');
+        assert.equal(findVar(r.outputs, 'hoge_data.score')?.type, 'float');
+    });
+
+    test('タグ付き typedef はタグ名・typedef 名の双方から解決する', async () => {
+        const r = await analyzeOrThrow(`
+typedef struct Tag { int x; } TagAlias;
+struct Tag by_tag;
+TagAlias by_alias;
+
+void setup(void) {
+    by_tag.x = 1;
+    by_alias.x = 2;
+}
+`, 'void setup(');
+        assert.equal(findVar(r.outputs, 'by_tag.x')?.type, 'int', 'タグ名から解決されること');
+        assert.equal(findVar(r.outputs, 'by_alias.x')?.type, 'int', 'typedef 名から解決されること');
+    });
+
+    test('構造体配列の要素のメンバ型を解決する', async () => {
+        const r = await analyzeOrThrow(`
+typedef struct { int id; } HogeStruct;
+HogeStruct tbl[5];
+
+void setup(void) {
+    tbl[0].id = 1;
+}
+`, 'void setup(');
+        const v = findVar(r.outputs, 'tbl[5].id');
+        assert.ok(v, `出力に tbl[5].id が含まれること: ${names(r.outputs)}`);
+        assert.equal(v.type, 'int', '根元の HogeStruct[5] ではなくメンバの型になること');
+    });
+
+    test('ネストした構造体メンバとアロー演算子を辿る', async () => {
+        const r = await analyzeOrThrow(`
+struct Sub { int member; };
+struct Outer { struct Sub sub; };
+struct Outer *var_ptr;
+
+void setup(void) {
+    var_ptr->sub.member = 30;
+}
+`, 'void setup(');
+        const v = findVar(r.outputs, 'var_ptr->sub.member');
+        assert.ok(v, `出力に var_ptr->sub.member が含まれること: ${names(r.outputs)}`);
+        assert.equal(v.type, 'int', '2段階辿ってメンバの型になること');
+    });
+
+    test('配列型・ポインタ型のメンバも型を解決する', async () => {
+        const r = await analyzeOrThrow(`
+struct Config { char name[8]; int *ptr; };
+struct Config cfg;
+
+void setup(void) {
+    cfg.ptr = 0;
+    cfg.name[0] = 'a';
+}
+`, 'void setup(');
+        assert.equal(findVar(r.outputs, 'cfg.ptr')?.type, 'int*', 'ポインタメンバの型');
+        assert.equal(findVar(r.outputs, 'cfg.name[8]')?.type, 'char',
+            `配列メンバは名前側に次元が出ること: ${names(r.outputs)}`);
+    });
+
+    test('添字なしで参照される配列メンバは型名側に次元を出す', async () => {
+        const r = await analyzeOrThrow(`
+struct Config { char name[8]; };
+struct Config cfg;
+
+int setup(void) {
+    return total(cfg.name);
+}
+`, 'int setup(');
+        assert.equal(findVar(r.inputs, 'cfg.name')?.type, 'char[8]');
+    });
+
+    test('共用体のメンバ型を解決する', async () => {
+        const r = await analyzeOrThrow(`
+union Value { int i; float f; };
+union Value val;
+
+void setup(void) {
+    val.f = 1.0;
+}
+`, 'void setup(');
+        assert.equal(findVar(r.outputs, 'val.f')?.type, 'float');
+    });
+
+    test('変数宣言と同時に定義された構造体のメンバ型を解決する', async () => {
+        const r = await analyzeOrThrow(`
+struct Data { int x; } global_data;
+
+void setup(void) {
+    global_data.x = 1;
+}
+`, 'void setup(');
+        assert.equal(findVar(r.outputs, 'global_data.x')?.type, 'int');
+    });
+
+    test('ポインタ引数のメンバ型も解決する', async () => {
+        const r = await analyzeOrThrow(`
+typedef struct { int id; } HogeStruct;
+
+void update(HogeStruct *data) {
+    data->id = 1;
+}
+`, 'void update(');
+        const v = findVar(r.outputs, 'data->id');
+        assert.ok(v, `出力に data->id が含まれること: ${names(r.outputs)}`);
+        assert.equal(v.type, 'int', '引数の型 HogeStruct* ではなくメンバの型になること');
+    });
+
+    test('構造体定義が見つからない場合は根元の型を維持する', async () => {
+        const r = await analyzeOrThrow(`
+extern struct Unknown ext_data;
+
+void setup(void) {
+    ext_data.field = 1;
+}
+`, 'void setup(');
+        const v = findVar(r.outputs, 'ext_data.field');
+        assert.ok(v, '出力に ext_data.field が含まれること');
+        assert.equal(v.type, 'struct Unknown', '解決できない場合は根元の型を表示すること');
+    });
+
+    test('存在しないメンバ名の場合は根元の型を維持する', async () => {
+        const r = await analyzeOrThrow(`
+struct Config { int mode; };
+struct Config cfg;
+
+void setup(void) {
+    cfg.unknown_field = 1;
+}
+`, 'void setup(');
+        const v = findVar(r.outputs, 'cfg.unknown_field');
+        assert.ok(v, '出力に cfg.unknown_field が含まれること');
+        assert.equal(v.type, 'struct Config', '解決できない場合は根元の型を表示すること');
+    });
+
+    test('関数内で定義された構造体は収集対象外とする', async () => {
+        const r = await analyzeOrThrow(`
+struct Config cfg;
+
+void setup(void) {
+    struct Config { int only_local; };
+    cfg.only_local = 1;
+}
+`, 'void setup(');
+        // 関数ボディ内のローカルな型定義は使わないため、根元の型のままとなる
+        assert.equal(findVar(r.outputs, 'cfg.only_local')?.type, 'struct Config');
+    });
+});
+
 describe('フェーズ4: 走査順序に依存しない分類', () => {
     test('呼び出しより前に参照された関数名を入力に重複させない', async () => {
         // 識別子 helper が call_expression より先に出現するケース。

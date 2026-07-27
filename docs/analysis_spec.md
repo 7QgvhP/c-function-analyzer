@@ -78,9 +78,32 @@ int prototype(int);                  // 関数プロトタイプ宣言のため�
 | 添字なしで参照されている | **型名** | 名前 `table` / 型 `int[8]` |
 | 内部変数（名前は宣言名そのもの） | **型名** | 名前 `local_arr` / 型 `int[5]` |
 
+#### 構造体メンバの型解決 (`resolveAccessPath`)
+
+アクセスパスを区切り文字（`.` と `->`）で分割し、構造体定義を辿って**最終的に参照しているメンバの型**を決定します。
+
+```
+var_ptr->sub.member
+  ↓ 根元 var_ptr の型 = struct Outer*
+  ↓ ポインタ表記を除去 → struct Outer
+  ↓ struct Outer のメンバ sub の型 = struct Sub
+  ↓ struct Sub のメンバ member の型 = int
+  → 表示する型 = int
+```
+
+| アクセスパス | 宣言 | 表示される型 |
+|---|---|---|
+| `tbl[5].id` | `HogeStruct tbl[5]` | `int` |
+| `var_ptr->sub.member` | `struct Outer *var_ptr` | `int` |
+| `cfg.name[8]` | `char name[8]` | `char` |
+| `cfg.name`（添字なし） | `char name[8]` | `char[8]` |
+| `cfg.ptr` | `int *ptr` | `int*` |
+
+構造体定義やメンバが見つからない場合は、**根元の変数の型をそのまま表示**します（無理に解決するより、根元の型が見えている方が手がかりになるため）。ポインタ引数のメンバアクセス（`data->id`）にも同じ解決を適用します。
+
 #### アクセスパスへの次元の反映
 
-添字でアクセスされた変数のアクセスパスは、いったん `[]` に正規化された後、**宣言された次元で置き換え**られます。
+添字でアクセスされた変数のアクセスパスは、いったん `[]` に正規化された後、**宣言された次元で置き換え**られます。置き換えは**セグメントごと**に行われ、各セグメントが指す変数・メンバの次元が使われます（`tbl[].id` の `[]` には `tbl` の次元が、`cfg.name[]` の `[]` にはメンバ `name` の次元が入ります）。
 
 | 宣言 | コード上の使用 | 表示される名前 |
 |---|---|---|
@@ -131,6 +154,24 @@ extern int shared_counter;
 ```
 
 条件の真偽は評価せず、`#if` / `#elif` / `#else` のいずれに書かれた宣言もすべて収集します。
+
+### 構造体・共用体定義の収集 (`collectStructDefinitions`)
+
+`struct_specifier` / `union_specifier` のうち **`body`（`field_declaration_list`）を持つもの**を定義とみなし、メンバ名と型を収集します（`struct Sub sub;` のような型参照は `body` を持たないため対象外です）。
+
+メンバの解析には変数宣言と同じ `collectDeclaredVars` を使用します。`field_declaration` は `declaration` と同じ構造（`type` + `declarator`）であるためです。配列メンバ（`char name[8]`）やポインタメンバ（`int *ptr`）も同じ仕組みで解決されます。
+
+登録キーは**タグ名と typedef 名の双方**を用意し、どちらの表記からも引けるようにします。
+
+| 宣言 | 登録キー |
+|---|---|
+| `struct Config { int mode; };` | `struct Config` |
+| `union Value { int i; };` | `union Value` |
+| `typedef struct { int id; } HogeStruct;` | `HogeStruct` |
+| `typedef struct Tag { int x; } TagAlias;` | `struct Tag` と `TagAlias` の両方 |
+| `struct Data { int x; } global_data;` | `struct Data` |
+
+関数ボディ内で定義されたローカルな型は収集対象外です。
 
 ### 関数名の収集 (`collectFileScopeFunctions`)
 
