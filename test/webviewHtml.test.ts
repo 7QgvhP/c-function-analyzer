@@ -196,6 +196,57 @@ describe('renderAnalysisHtml: 定義位置とジャンプボタン', () => {
     });
 });
 
+describe('renderAnalysisHtml: 分類ごとの一括コピー', () => {
+    test('項目があるセクションに一括コピーボタンを出力する', () => {
+        const html = renderAnalysisHtml(makeResult({
+            inputs: [{ name: 'a', type: 'int', details: '' }]
+        }), 'N');
+        assert.ok(html.includes('class="section-copy-button"'), '一括コピーボタンが出力されること');
+    });
+
+    test('項目がないセクションには一括コピーボタンを出力しない', () => {
+        const html = renderAnalysisHtml(makeResult(), 'N');
+        assert.ok(!html.includes('class="section-copy-button"'), 'ボタンが出力されないこと');
+    });
+
+    test('一括コピーボタンを件数バッジと同じ操作領域に配置する', () => {
+        const html = renderAnalysisHtml(makeResult({
+            inputs: [{ name: 'a', type: 'int', details: '' }]
+        }), 'N');
+        // section-actions 内に件数バッジとコピーボタンが並ぶ
+        assert.ok(
+            /<span class="section-actions">\s*<span class="section-count">1<\/span>\s*<button class="section-copy-button"/.test(html),
+            '件数バッジの直後にコピーボタンが配置されること'
+        );
+    });
+
+    test('コピー対象の名前を data-name から収集できる', () => {
+        // 一括コピーは各項目の data-name を集めて改行で連結する
+        const html = renderAnalysisHtml(makeResult({
+            inputs: [
+                { name: 'hoge[N]', type: 'int', details: '' },
+                { name: 'fuga', type: 'float', details: '' }
+            ]
+        }), 'N');
+        const collected = [...html.matchAll(/class="variable-item" data-name="([^"]*)"/g)].map(m => m[1]);
+        assert.deepEqual(collected, ['hoge[N]', 'fuga'], '全項目の data-name が取得できること');
+    });
+
+    test('一括コピーは改行区切りで連結する', () => {
+        // Webview 内スクリプトが生成する連結処理を取り出して評価する
+        const html = renderAnalysisHtml(makeResult({
+            inputs: [{ name: 'a', type: 'int', details: '' }]
+        }), 'N');
+        const start = html.indexOf('names.join');
+        assert.ok(start >= 0, '連結処理が出力されること');
+        const snippet = html.substring(start, html.indexOf(')', start) + 1);
+
+        // 生成された式をそのまま関数化して評価する（区切り文字が改行であることを確認する）
+        const joinNames = new Function('names', `return ${snippet};`) as (names: string[]) => string;
+        assert.equal(joinNames(['alpha', 'beta', 'gamma']), 'alpha\nbeta\ngamma', '改行で区切られること');
+    });
+});
+
 describe('renderAnalysisHtml: セクション構成', () => {
     test('各セクションの件数を表示する', () => {
         const html = renderAnalysisHtml(makeResult({
@@ -206,8 +257,14 @@ describe('renderAnalysisHtml: セクション構成', () => {
             outputs: [{ name: 'c', type: 'int', details: '' }]
         }), 'N');
         assert.ok(html.includes('<span class="section-title-text">入力変数</span>'), '入力変数セクションが存在すること');
-        assert.ok(/入力変数<\/span>\s*<span class="section-count">2<\/span>/.test(html), '入力変数の件数が2であること');
-        assert.ok(/出力変数<\/span>\s*<span class="section-count">1<\/span>/.test(html), '出力変数の件数が1であること');
+        assert.ok(
+            /入力変数<\/span>\s*<span class="section-actions">\s*<span class="section-count">2<\/span>/.test(html),
+            '入力変数の件数が2であること'
+        );
+        assert.ok(
+            /出力変数<\/span>\s*<span class="section-actions">\s*<span class="section-count">1<\/span>/.test(html),
+            '出力変数の件数が1であること'
+        );
     });
 
     test('該当がないセクションはプレースホルダを表示する', () => {
