@@ -4,7 +4,7 @@
  * VS Code API には依存しない純粋な文字列処理のみで構成されており、
  * ヘッドレス環境（Node 単体）でテスト可能な状態を保っています。
  */
-import { AnalysisResult, VariableInfo } from './analyzer';
+import { AnalysisResult, DefinitionLocation, FunctionInfo, VariableInfo } from './analyzer';
 import { WEBVIEW_STYLES } from './webviewStyles';
 
 /**
@@ -37,6 +37,35 @@ export function createNonce(): string {
 }
 
 /**
+ * 定義位置を表すデータ属性を生成します。
+ *
+ * @param definition 定義位置（未特定の場合は undefined）
+ * @returns HTML属性の文字列（未特定の場合は空文字列）
+ */
+function renderDefinitionAttrs(definition?: DefinitionLocation): string {
+    if (!definition) {
+        return '';
+    }
+    const filePathAttr = definition.filePath
+        ? ` data-def-file="${escapeHtml(definition.filePath)}"`
+        : '';
+    return ` data-def-line="${definition.line}" data-def-column="${definition.column}"${filePathAttr}`;
+}
+
+/**
+ * 「定義へ」ボタンのHTMLを生成します。
+ *
+ * @param definition 定義位置（未特定の場合はボタンを出力しません）
+ * @returns 生成したHTML
+ */
+function renderDefinitionButton(definition?: DefinitionLocation): string {
+    if (!definition) {
+        return '';
+    }
+    return '<button class="var-def-button" title="定義へ移動">定義へ</button>';
+}
+
+/**
  * 変数リストの各行のHTMLを生成します。
  *
  * @param vars 変数情報のリスト
@@ -51,13 +80,16 @@ function renderVariableList(vars: VariableInfo[]): string {
         const highlightable = v.highlightable !== false;
         const name = escapeHtml(v.name);
         return `
-                <div class="variable-item" data-name="${name}" data-highlightable="${highlightable}">
+                <div class="variable-item" data-name="${name}" data-highlightable="${highlightable}"${renderDefinitionAttrs(v.definition)}>
                     <div class="variable-row">
                         <div class="variable-info">
                             <span class="variable-type">${escapeHtml(v.type)}</span>
                             <span class="variable-name">${name}</span>
                         </div>
-                        <button class="var-copy-button" data-name="${name}">コピー</button>
+                        <div class="variable-actions">
+                            ${renderDefinitionButton(v.definition)}
+                            <button class="var-copy-button" data-name="${name}">コピー</button>
+                        </div>
                     </div>
                 </div>
             `;
@@ -67,23 +99,26 @@ function renderVariableList(vars: VariableInfo[]): string {
 /**
  * 呼び出し関数リストの各行のHTMLを生成します。
  *
- * @param funcs 関数名のリスト
+ * @param funcs 関数情報のリスト
  * @returns 生成したHTML（該当がない場合はプレースホルダ）
  */
-function renderCalledFunctions(funcs: string[]): string {
+function renderCalledFunctions(funcs: FunctionInfo[]): string {
     if (funcs.length === 0) {
         return '<div class="no-data">関数呼び出しはありません</div>';
     }
     return funcs.map(f => {
         // 表示上の末尾 "()" を取り除いた名前を、ハイライト・コピーの対象とする
-        const cleanName = escapeHtml(f.endsWith('()') ? f.slice(0, -2) : f);
+        const cleanName = escapeHtml(f.name.endsWith('()') ? f.name.slice(0, -2) : f.name);
         return `
-                <div class="variable-item" data-name="${cleanName}" data-highlightable="true">
+                <div class="variable-item" data-name="${cleanName}" data-highlightable="true"${renderDefinitionAttrs(f.definition)}>
                     <div class="variable-row">
                         <div class="variable-info">
-                            <span class="variable-name">${escapeHtml(f)}</span>
+                            <span class="variable-name">${escapeHtml(f.name)}</span>
                         </div>
-                        <button class="var-copy-button" data-name="${cleanName}">コピー</button>
+                        <div class="variable-actions">
+                            ${renderDefinitionButton(f.definition)}
+                            <button class="var-copy-button" data-name="${cleanName}">コピー</button>
+                        </div>
                     </div>
                 </div>
                 `;
@@ -175,6 +210,28 @@ ${macroFunctions.length > 0 ? renderSection('macro-fn', 'マクロ関数', macro
                 if (name) {
                     vscode.postMessage({ command: 'highlightVariable', name: name });
                 }
+            });
+        });
+
+        // 「定義へ」ボタンのクリック処理
+        document.querySelectorAll('.var-def-button').forEach(button => {
+            button.addEventListener('click', (e) => {
+                e.stopPropagation(); // 親要素のクリックイベント（ハイライト）が走るのを防止
+                const item = button.closest('.variable-item');
+                if (!item) {
+                    return;
+                }
+                const line = item.getAttribute('data-def-line');
+                if (line === null) {
+                    return;
+                }
+                vscode.postMessage({
+                    command: 'revealDefinition',
+                    line: Number(line),
+                    column: Number(item.getAttribute('data-def-column') || 0),
+                    // data-def-file が無い場合は解析対象ファイル自身を指す
+                    filePath: item.getAttribute('data-def-file') || undefined
+                });
             });
         });
 

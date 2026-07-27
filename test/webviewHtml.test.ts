@@ -115,7 +115,7 @@ describe('renderAnalysisHtml: データ属性', () => {
     });
 
     test('呼び出し関数の data-name から末尾の () を取り除く', () => {
-        const html = renderAnalysisHtml(makeResult({ calledFunctions: ['log_message()'] }), 'N');
+        const html = renderAnalysisHtml(makeResult({ calledFunctions: [{ name: 'log_message()' }] }), 'N');
         assert.ok(html.includes('data-name="log_message"'), 'data-name は () なしであること');
         assert.ok(html.includes('>log_message()<'), '表示名は () 付きのままであること');
     });
@@ -125,6 +125,74 @@ describe('renderAnalysisHtml: データ属性', () => {
             inputs: [{ name: 'value', type: 'int', details: '' }]
         }), 'N');
         assert.ok(html.includes('<button class="var-copy-button" data-name="value">'), 'コピーボタンに data-name が付くこと');
+    });
+});
+
+describe('renderAnalysisHtml: 定義位置とジャンプボタン', () => {
+    test('定義位置がある項目に「定義へ」ボタンとデータ属性を出力する', () => {
+        const html = renderAnalysisHtml(makeResult({
+            inputs: [{ name: 'threshold', type: 'int', details: '', definition: { line: 5, column: 4 } }]
+        }), 'N');
+        assert.ok(html.includes('data-def-line="5"'), '行番号が出力されること');
+        assert.ok(html.includes('data-def-column="4"'), '列番号が出力されること');
+        assert.ok(html.includes('class="var-def-button"'), '「定義へ」ボタンが出力されること');
+    });
+
+    test('定義位置がない項目には「定義へ」ボタンを出力しない', () => {
+        const html = renderAnalysisHtml(makeResult({
+            inputs: [{ name: 'unknown_global', type: 'global (推定)', details: '' }]
+        }), 'N');
+        // Webview 内スクリプトにもクラス名・属性名が現れるため、属性の記述形式で判定する
+        assert.ok(!html.includes('class="var-def-button"'), 'ボタンが出力されないこと');
+        assert.ok(!html.includes('data-def-line="'), '行番号の属性も出力されないこと');
+    });
+
+    test('インクルードファイル内の定義には data-def-file を出力する', () => {
+        const html = renderAnalysisHtml(makeResult({
+            inputs: [{
+                name: 'shared_counter',
+                type: 'int',
+                details: '',
+                definition: { line: 3, column: 11, filePath: 'file:///c:/proj/config.h' }
+            }]
+        }), 'N');
+        assert.ok(html.includes('data-def-file="file:///c:/proj/config.h"'), 'ファイルパスが出力されること');
+    });
+
+    test('同一ファイル内の定義では data-def-file を出力しない', () => {
+        const html = renderAnalysisHtml(makeResult({
+            inputs: [{ name: 'local_val', type: 'int', details: '', definition: { line: 2, column: 8 } }]
+        }), 'N');
+        assert.ok(html.includes('data-def-line="2"'), '行番号は出力されること');
+        assert.ok(!html.includes('data-def-file="'), 'ファイルパスは出力されないこと');
+    });
+
+    test('定義位置のファイルパスをHTMLエスケープする', () => {
+        const html = renderAnalysisHtml(makeResult({
+            inputs: [{
+                name: 'x',
+                type: 'int',
+                details: '',
+                definition: { line: 0, column: 0, filePath: 'a"><script>alert(1)</script>' }
+            }]
+        }), 'N');
+        assert.ok(!html.includes('<script>alert(1)</script>'), '生のスクリプトタグが混入しないこと');
+        assert.ok(html.includes('&lt;script&gt;'), 'エスケープされること');
+    });
+
+    test('呼び出し関数の定義位置も出力する', () => {
+        const html = renderAnalysisHtml(makeResult({
+            calledFunctions: [{ name: 'helper', definition: { line: 12, column: 4 } }]
+        }), 'N');
+        assert.ok(html.includes('data-def-line="12"'), '行番号が出力されること');
+        assert.ok(html.includes('class="var-def-button"'), '「定義へ」ボタンが出力されること');
+    });
+
+    test('定義位置がない呼び出し関数にはボタンを出力しない', () => {
+        const html = renderAnalysisHtml(makeResult({
+            calledFunctions: [{ name: 'printf' }]
+        }), 'N');
+        assert.ok(!html.includes('class="var-def-button"'), 'ボタンが出力されないこと');
     });
 });
 
@@ -159,7 +227,7 @@ describe('renderAnalysisHtml: セクション構成', () => {
 
         const withMacros = renderAnalysisHtml(makeResult({
             macroVariables: [{ name: 'MAX_LIMIT', type: 'macro (推定)', details: '' }],
-            macroFunctions: ['LOG_MSG']
+            macroFunctions: [{ name: 'LOG_MSG' }]
         }), 'N');
         assert.ok(withMacros.includes(macroVarHeading), 'マクロ変数セクションが出力されること');
         assert.ok(withMacros.includes(macroFnHeading), 'マクロ関数セクションが出力されること');

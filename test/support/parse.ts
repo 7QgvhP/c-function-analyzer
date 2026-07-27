@@ -95,13 +95,13 @@ export async function analyzeOrThrow(
 }
 
 /**
- * 変数情報リストから名前のみを配列として取り出します。
+ * 変数情報・関数情報リストから名前のみを配列として取り出します。
  *
- * @param vars 変数情報リスト
- * @returns 変数名の配列
+ * @param items 名前を持つ要素のリスト（VariableInfo / FunctionInfo）
+ * @returns 名前の配列
  */
-export function names(vars: VariableInfo[]): string[] {
-    return vars.map(v => v.name);
+export function names(items: { name: string }[]): string[] {
+    return items.map(v => v.name);
 }
 
 /**
