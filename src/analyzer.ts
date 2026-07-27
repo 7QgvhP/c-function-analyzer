@@ -29,6 +29,31 @@ export interface VariableInfo {
     definition?: DefinitionLocation;
 }
 
+/** インクルードファイルの解決結果 */
+export interface ResolvedInclude {
+    /** 解析済みのAST */
+    tree: Parser.Tree;
+    /** 実際に読み込んだファイルのパス（定義位置の filePath として使用されます） */
+    filePath: string;
+}
+
+/**
+ * `#include "..."` を解決してASTを返すインターフェースです。
+ *
+ * ファイルの読み込みは環境依存の処理であるため、実装は拡張機能ホスト側
+ * （`includeResolver.ts`）が提供し、解析ロジックからは注入して使用します。
+ */
+export interface IncludeResolver {
+    /**
+     * インクルードパスを解決します。
+     *
+     * @param includePath `#include "..."` に記述されたパス（例: `config.h`, `sub/types.h`）
+     * @param fromFilePath そのインクルードが記述されているファイルのパス
+     * @returns 解決できた場合はASTとファイルパス、できなければ null
+     */
+    resolve(includePath: string, fromFilePath?: string): ResolvedInclude | null;
+}
+
 /** 呼び出し関数・マクロ関数の情報 */
 export interface FunctionInfo {
     /** 表示名（マクロ関数を含む） */
@@ -82,6 +107,33 @@ interface DeclaredVar {
     /** 宣言されている位置 */
     definition: DefinitionLocation;
 }
+
+/** マクロ定義の情報 */
+interface MacroDefinition {
+    /** 定義値（`#define MAX_LIMIT 10` の `10`）。値を持たないマクロは空文字列 */
+    value: string;
+    /** 定義されている位置 */
+    definition: DefinitionLocation;
+}
+
+/**
+ * フェーズ1で収集したファイルスコープのシンボル情報です。
+ * 解析対象ファイル自身とインクルードファイルの内容がマージされます。
+ */
+interface FileScopeSymbols {
+    /** グローバル変数（名前 → 型名と宣言位置） */
+    vars: Map<string, DeclaredVar>;
+    /** 関数（名前 → 定義位置） */
+    functions: Map<string, DefinitionLocation>;
+    /** マクロ（名前 → 定義値と定義位置） */
+    macros: Map<string, MacroDefinition>;
+}
+
+/** インクルードを辿る深さの上限（循環や過剰な探索を防ぐ） */
+const MAX_INCLUDE_DEPTH = 8;
+
+/** マクロ定義値を型名バッジに表示する際の最大文字数 */
+const MACRO_VALUE_MAX_LENGTH = 24;
 
 /** フェーズ3: 関数シグネチャの解析結果 */
 interface SignatureInfo {
@@ -142,6 +194,17 @@ function toDefinitionLocation(node: Parser.SyntaxNode, filePath?: string): Defin
 }
 
 /**
+ * プリプロセッサ条件ブロックのノード種別です。
+ * これらの内側もファイルスコープと同じ階層として扱います。
+ */
+const PREPROC_BLOCK_TYPES = new Set([
+    'preproc_ifdef',
+    'preproc_if',
+    'preproc_elif',
+    'preproc_else'
+]);
+
+/**
  * ASTノードを再帰的に走査するヘルパー関数
  */
 function walk(node: Parser.SyntaxNode, callback: (node: Parser.SyntaxNode) => void) {
@@ -149,6 +212,29 @@ function walk(node: Parser.SyntaxNode, callback: (node: Parser.SyntaxNode) => vo
     for (let i = 0; i < node.childCount; i++) {
         walk(node.child(i)!, callback);
     }
+}
+
+/**
+ * ファイルスコープに属するノードを列挙します。
+ *
+ * インクルードガード（`#ifndef HEADER_H`）や条件コンパイルの内側にある宣言も
+ * ファイルスコープの宣言として扱うため、プリプロセッサ条件ブロックは
+ * 透過的に降りて走査します。関数ボディの内側には入りません。
+ *
+ * @param node 起点ノード（通常は translation_unit）
+ * @param callback 各ノードに対して呼ばれるコールバック
+ */
+function forEachFileScopeNode(
+    node: Parser.SyntaxNode,
+    callback: (node: Parser.SyntaxNode) => void
+): void {
+    node.children.forEach(child => {
+        if (PREPROC_BLOCK_TYPES.has(child.type)) {
+            forEachFileScopeNode(child, callback);
+            return;
+        }
+        callback(child);
+    });
 }
 
 /**
@@ -282,7 +368,7 @@ function collectFileScopeVars(
     filePath?: string
 ): Map<string, DeclaredVar> {
     const fileScopeVars = new Map<string, DeclaredVar>();
-    rootNode.children.forEach(node => {
+    forEachFileScopeNode(rootNode, node => {
         if (node.type === 'declaration') {
             collectDeclaredVars(node, fileScopeVars, filePath);
         }
@@ -306,7 +392,7 @@ function collectFileScopeFunctions(
 ): Map<string, DefinitionLocation> {
     const functionNames = new Map<string, DefinitionLocation>();
 
-    rootNode.children.forEach(node => {
+    forEachFileScopeNode(rootNode, node => {
         // 関数定義: int helper(int x) { ... }
         if (node.type === 'function_definition') {
             const declaratorNode = node.childForFieldName('declarator');
@@ -338,6 +424,171 @@ function collectFileScopeFunctions(
     });
 
     return functionNames;
+}
+
+/**
+ * フェーズ1: マクロ定義（`#define`）を収集します。
+ *
+ * `#ifdef` ブロック内の定義も拾うため、AST全体を走査します。
+ * オブジェクト形式（`#define MAX 10`）と関数形式（`#define SQ(x) ((x)*(x))`）の双方に対応します。
+ *
+ * @param rootNode ASTのルートノード
+ * @param filePath インクルードファイルの場合はそのパス
+ * @returns マクロ名 → 定義値と定義位置 のマップ
+ */
+function collectMacros(
+    rootNode: Parser.SyntaxNode,
+    filePath?: string
+): Map<string, MacroDefinition> {
+    const macros = new Map<string, MacroDefinition>();
+
+    walk(rootNode, (node) => {
+        if (node.type !== 'preproc_def' && node.type !== 'preproc_function_def') {
+            return;
+        }
+        const nameNode = node.childForFieldName('name');
+        if (!nameNode || macros.has(nameNode.text)) {
+            return;
+        }
+        const valueNode = node.childForFieldName('value');
+        macros.set(nameNode.text, {
+            value: valueNode ? valueNode.text.replace(/\s+/g, ' ').trim() : '',
+            definition: toDefinitionLocation(nameNode, filePath)
+        });
+    });
+
+    return macros;
+}
+
+/**
+ * フェーズ1: 1つのファイルからファイルスコープのシンボル（変数・関数・マクロ）を収集します。
+ *
+ * @param rootNode ASTのルートノード
+ * @param filePath インクルードファイルの場合はそのパス
+ * @returns 収集したシンボル情報
+ */
+function collectFileScopeSymbols(
+    rootNode: Parser.SyntaxNode,
+    filePath?: string
+): FileScopeSymbols {
+    return {
+        vars: collectFileScopeVars(rootNode, filePath),
+        functions: collectFileScopeFunctions(rootNode, filePath),
+        macros: collectMacros(rootNode, filePath)
+    };
+}
+
+/**
+ * シンボル情報をマージします。
+ *
+ * 既に登録されている定義（＝解析対象ファイル自身、またはより浅いインクルード）を優先し、
+ * 未登録のものだけを補います。
+ *
+ * @param into マージ先
+ * @param from マージ元
+ */
+function mergeSymbols(into: FileScopeSymbols, from: FileScopeSymbols): void {
+    from.vars.forEach((value, key) => {
+        if (!into.vars.has(key)) {
+            into.vars.set(key, value);
+        }
+    });
+    from.functions.forEach((value, key) => {
+        if (!into.functions.has(key)) {
+            into.functions.set(key, value);
+        }
+    });
+    from.macros.forEach((value, key) => {
+        if (!into.macros.has(key)) {
+            into.macros.set(key, value);
+        }
+    });
+}
+
+/**
+ * フェーズ1: `#include "..."` を再帰的に辿り、インクルードファイル内のシンボルを収集します。
+ *
+ * システムインクルード（`#include <...>`）は対象外です。
+ * 循環インクルードは解決済みファイルパスの集合で検出し、探索の深さにも上限を設けています。
+ *
+ * @param rootNode 走査対象のASTルートノード
+ * @param resolver インクルードパスの解決を担うリゾルバ
+ * @param fromFilePath 走査対象ファイルのパス（相対パス解決の起点）
+ * @param into 収集先のシンボル情報
+ * @param visited 既に解決したファイルパスの集合
+ * @param depth 現在の探索深さ
+ */
+function collectIncludedSymbols(
+    rootNode: Parser.SyntaxNode,
+    resolver: IncludeResolver,
+    fromFilePath: string | undefined,
+    into: FileScopeSymbols,
+    visited: Set<string>,
+    depth: number
+): void {
+    if (depth >= MAX_INCLUDE_DEPTH) {
+        return;
+    }
+
+    // 先にインクルードパスを集める（#ifdef 内のものも拾うため AST 全体を走査）
+    const includePaths: string[] = [];
+    walk(rootNode, (node) => {
+        if (node.type !== 'preproc_include') {
+            return;
+        }
+        const pathNode = node.childForFieldName('path');
+        // system_lib_string（<stdio.h>）はシステムインクルードのため対象外
+        if (!pathNode || pathNode.type !== 'string_literal') {
+            return;
+        }
+        // 前後のダブルクォートを取り除く
+        const raw = pathNode.text;
+        const inner = raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')
+            ? raw.slice(1, -1)
+            : raw;
+        if (inner) {
+            includePaths.push(inner);
+        }
+    });
+
+    for (const includePath of includePaths) {
+        let resolved: ResolvedInclude | null = null;
+        try {
+            resolved = resolver.resolve(includePath, fromFilePath);
+        } catch {
+            // 読み込み失敗やパースエラーは解析全体を止めず、そのインクルードのみ諦める
+            resolved = null;
+        }
+        if (!resolved || visited.has(resolved.filePath)) {
+            continue;
+        }
+        visited.add(resolved.filePath);
+
+        const included = collectFileScopeSymbols(resolved.tree.rootNode, resolved.filePath);
+        mergeSymbols(into, included);
+
+        // さらに深いインクルードを辿る
+        collectIncludedSymbols(resolved.tree.rootNode, resolver, resolved.filePath, into, visited, depth + 1);
+    }
+}
+
+/**
+ * マクロ定義を型名バッジ用の表示文字列に整形します。
+ *
+ * @param macro マクロ定義（未解決の場合は undefined）
+ * @returns 表示用の文字列
+ */
+function formatMacroType(macro?: MacroDefinition): string {
+    if (!macro) {
+        return 'macro (推定)';
+    }
+    if (!macro.value) {
+        return 'macro';
+    }
+    const value = macro.value.length > MACRO_VALUE_MAX_LENGTH
+        ? macro.value.slice(0, MACRO_VALUE_MAX_LENGTH) + '…'
+        : macro.value;
+    return `macro (${value})`;
 }
 
 /**
@@ -592,8 +843,7 @@ function analyzeBody(
  * @param funcNode function_definition ノード（行範囲の取得に使用）
  * @param signature フェーズ3のシグネチャ解析結果
  * @param body フェーズ4のボディ解析結果
- * @param fileScopeVars フェーズ1で収集したグローバル変数の型情報と宣言位置
- * @param fileScopeFunctions フェーズ1で収集した関数名と定義位置
+ * @param symbols フェーズ1で収集したファイルスコープのシンボル情報
  * @param classifyAllUppercaseAsMacros 大文字のみの識別子をマクロとして分類するか
  * @returns 最終的な解析結果
  */
@@ -601,8 +851,7 @@ function buildResult(
     funcNode: Parser.SyntaxNode,
     signature: SignatureInfo,
     body: BodyAnalysis,
-    fileScopeVars: Map<string, DeclaredVar>,
-    fileScopeFunctions: Map<string, DefinitionLocation>,
+    symbols: FileScopeSymbols,
     classifyAllUppercaseAsMacros: boolean
 ): AnalysisResult {
     const { functionName, returnType, params } = signature;
@@ -617,8 +866,9 @@ function buildResult(
     // 呼び出し関数の大文字マクロ分類
     calledFunctions.forEach(func => {
         const info: FunctionInfo = { name: func };
-        // ファイル内に定義・宣言があれば、その位置をジャンプ先として持たせる
-        const definition = fileScopeFunctions.get(func);
+        // 関数定義・プロトタイプ宣言、またはマクロ定義があれば、その位置をジャンプ先として持たせる
+        const macro = symbols.macros.get(func);
+        const definition = symbols.functions.get(func) || (macro ? macro.definition : undefined);
         if (definition) {
             info.definition = definition;
         }
@@ -712,13 +962,18 @@ function buildResult(
         paths.forEach(path => {
             const rootName = getRootName(path);
             if (classifyAllUppercaseAsMacros && isAllUppercase(rootName)) {
-                macroVariables.push({
+                const macro = symbols.macros.get(rootName);
+                const entry: VariableInfo = {
                     name: path,
-                    type: 'macro (推定)',
+                    type: formatMacroType(macro),
                     details: macroDetails
-                });
+                };
+                if (macro) {
+                    entry.definition = macro.definition;
+                }
+                macroVariables.push(entry);
             } else {
-                const declared = fileScopeVars.get(rootName);
+                const declared = symbols.vars.get(rootName);
                 const entry: VariableInfo = {
                     name: path,
                     type: declared ? declared.type : 'global (推定)',
@@ -763,7 +1018,7 @@ function buildResult(
  * C言語コードを解析し、カーソル行にある関数情報を抽出します。
  *
  * 解析は以下の5フェーズで構成されます（詳細は docs/analysis_spec.md を参照）。
- *   1. ファイルスコープの型情報収集   (collectFileScopeVars)
+ *   1. ファイルスコープのシンボル収集 (collectFileScopeSymbols / collectIncludedSymbols)
  *   2. カーソル位置の関数同定         (findFunctionAtCursor)
  *   3. 関数シグネチャの解析           (parseSignature)
  *   4. 関数ボディの走査               (analyzeBody)
@@ -772,17 +1027,34 @@ function buildResult(
  * @param tree 解析対象のASTツリー
  * @param cursorLine ユーザーがカーソルを置いている行（0始まり）
  * @param classifyAllUppercaseAsMacros 大文字のみの識別子をマクロとして分類するか
+ * @param options インクルード探索の設定。省略した場合は解析対象ファイル内のみを参照します
  * @returns 解析結果、またはカーソルが関数名部分にない場合は null
  */
 export function analyzeCFunction(
     tree: Parser.Tree,
     cursorLine: number,
-    classifyAllUppercaseAsMacros: boolean = true
+    classifyAllUppercaseAsMacros: boolean = true,
+    options?: {
+        /** `#include "..."` を解決するリゾルバ */
+        includeResolver?: IncludeResolver;
+        /** 解析対象ファイルのパス（相対インクルードの解決起点） */
+        currentFilePath?: string;
+    }
 ): AnalysisResult | null {
     const rootNode = tree.rootNode;
 
-    const fileScopeVars = collectFileScopeVars(rootNode);
-    const fileScopeFunctions = collectFileScopeFunctions(rootNode);
+    // 解析対象ファイル自身のシンボルを先に収集し、インクルード側は不足分のみを補う
+    const symbols = collectFileScopeSymbols(rootNode);
+    if (options && options.includeResolver) {
+        collectIncludedSymbols(
+            rootNode,
+            options.includeResolver,
+            options.currentFilePath,
+            symbols,
+            new Set<string>(),
+            0
+        );
+    }
 
     const funcNode = findFunctionAtCursor(rootNode, cursorLine);
     if (!funcNode) {
@@ -790,9 +1062,9 @@ export function analyzeCFunction(
     }
 
     const signature = parseSignature(funcNode);
-    const body = analyzeBody(funcNode.childForFieldName('body'), signature.params, fileScopeFunctions);
+    const body = analyzeBody(funcNode.childForFieldName('body'), signature.params, symbols.functions);
 
-    return buildResult(funcNode, signature, body, fileScopeVars, fileScopeFunctions, classifyAllUppercaseAsMacros);
+    return buildResult(funcNode, signature, body, symbols, classifyAllUppercaseAsMacros);
 }
 
 /**

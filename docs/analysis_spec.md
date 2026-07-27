@@ -41,7 +41,7 @@ flowchart TD
 
 | フェーズ | 関数名 |
 |---|---|
-| 1 | `collectFileScopeVars` |
+| 1 | `collectFileScopeSymbols` / `collectIncludedSymbols` |
 | 2 | `findFunctionAtCursor` |
 | 3 | `parseSignature` |
 | 4 | `analyzeBody` |
@@ -68,6 +68,21 @@ int prototype(int);                  // 関数プロトタイプ宣言のため�
 
 なお、変数宣言のスキャン処理（`collectDeclaredVars`）はファイルスコープとローカル変数で共通化されており、カンマ区切りの複数宣言・初期化子付き宣言・配列・多重ポインタ・関数ポインタ宣言に対応します。
 
+### ファイルスコープの走査範囲 (`forEachFileScopeNode`)
+
+宣言の走査は、AST ルート直下だけでなく**プリプロセッサ条件ブロックの内側も透過的に降りて**行います（`preproc_ifdef` / `preproc_if` / `preproc_elif` / `preproc_else`）。関数ボディの内側には入りません。
+
+これはインクルードガードに対応するためです。C言語ヘッダのほぼ全てが以下の形をとるため、この対応がないとヘッダ内の宣言を一切収集できません。
+
+```c
+#ifndef CONFIG_H        // ← 以下の宣言は preproc_ifdef の子になる
+#define CONFIG_H
+extern int shared_counter;
+#endif
+```
+
+条件の真偽は評価せず、`#if` / `#elif` / `#else` のいずれに書かれた宣言もすべて収集します。
+
 ### 関数名の収集 (`collectFileScopeFunctions`)
 
 変数の型情報とは別に、ファイル内で宣言・定義されている**関数の名前**も収集します。
@@ -78,6 +93,50 @@ int prototype(int);                  // 関数プロトタイプ宣言のため�
 | 関数プロトタイプ宣言 | `int helper(int x);` |
 
 これはフェーズ4で、関数名が値として参照されているだけの場合にグローバル変数と誤分類しないための除外リストとして使用します（詳細は「4.4 識別子の参照・読み取り判定」を参照）。
+
+### マクロ定義の収集 (`collectMacros`)
+
+`#define` からマクロ名・定義値・定義位置を収集します。オブジェクト形式（`#define MAX 10`）と関数形式（`#define SQ(x) ((x)*(x))`）の双方に対応します。
+
+型名バッジには次のように表示されます。
+
+| 状態 | 表示 |
+|---|---|
+| 値を持つマクロ | `macro (10)`（24文字を超える値は末尾を省略） |
+| 値を持たないマクロ | `macro` |
+| 定義が見つからない | `macro (推定)` |
+
+### インクルードファイルの探索 (`collectIncludedSymbols`)
+
+`#include "..."` を再帰的に辿り、ヘッダ内で宣言された変数・関数・マクロを収集します。これにより、従来 `global (推定)` と表示されていたグローバル変数が実際の型で表示され、定義位置へのジャンプも可能になります。
+
+ファイル読み込みは環境依存の処理であるため、解析ロジックからは分離し `IncludeResolver` として**注入**します。実装は `src/includeResolver.ts` の `FileIncludeResolver` が提供します。
+
+```typescript
+export interface IncludeResolver {
+    resolve(includePath: string, fromFilePath?: string): ResolvedInclude | null;
+}
+```
+
+この構成により、`analyzer.ts` は `web-tree-sitter` のみに依存する状態を保っており、テストではメモリ上の疑似リゾルバを注入して実ファイルなしで検証しています。
+
+#### 探索の仕様
+
+| 項目 | 内容 |
+|---|---|
+| 対象 | `#include "..."`（`string_literal`）のみ。`#include <...>`（`system_lib_string`）は対象外 |
+| 探索パス | ①インクルード元ファイルのディレクトリ ②各ワークスペースフォルダの直下 |
+| 再帰 | 辿る。深さ上限は 8 段 |
+| 循環検出 | 解決済みファイルパスの集合で検出し、同一ファイルは一度だけ展開 |
+| 優先順位 | 解析対象ファイル自身の宣言が最優先。インクルード側は未登録のシンボルのみを補う |
+| 失敗時 | 解決できないインクルードやリゾルバの例外は無視し、解析を継続する |
+| キャッシュ | ファイルパスと更新時刻で管理し、同一セッション中は再パースしない |
+
+#### 制約
+
+- 探索パスはインクルード元ディレクトリとワークスペース直下のみです。`src/foo.c` から `#include "types.h"` と書かれていて実体が `include/types.h` にある構成は解決できません。
+- ファイルは保存済みの内容を読み込むため、エディタ上の未保存の編集は反映されません。
+- `typedef` は展開しません（`typedef unsigned char BYTE;` があっても `BYTE g_flags;` は `BYTE` と表示します）。
 
 ---
 
