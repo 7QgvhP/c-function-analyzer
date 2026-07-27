@@ -206,7 +206,16 @@ export const WEBVIEW_STYLES = `
             background: rgba(255, 255, 255, 0.06);
         }
 
-        .var-copy-button {
+        /* 行内の操作ボタン群（「定義へ」「コピー」） */
+        .variable-actions {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+
+        .var-copy-button,
+        .var-def-button {
             background: rgba(255, 255, 255, 0.03);
             border: 1px solid rgba(255, 255, 255, 0.05);
             color: var(--text-muted);
@@ -220,14 +229,24 @@ export const WEBVIEW_STYLES = `
             white-space: nowrap;
         }
 
-        .variable-item:hover .var-copy-button {
+        .variable-item:hover .var-copy-button,
+        .variable-item:hover .var-def-button {
             opacity: 1;
         }
 
-        .var-copy-button:hover {
+        .var-copy-button:hover,
+        .var-def-button:hover {
             background: rgba(255, 255, 255, 0.08);
             color: var(--vscode-editor-foreground, #ffffff);
             border-color: rgba(255, 255, 255, 0.15);
+        }
+
+        /* 「定義へ」ボタンはアクセント色で区別する */
+        .var-def-button {
+            color: var(--accent-color);
+        }
+        .var-def-button:hover {
+            border-color: var(--accent-color);
         }
 
         .var-copy-button.copied {

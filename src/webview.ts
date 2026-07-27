@@ -56,6 +56,9 @@ export class FunctionAnalyzerWebview {
                     case 'copyText':
                         vscode.env.clipboard.writeText(message.text);
                         break;
+                    case 'revealDefinition':
+                        this._revealDefinition(message.line, message.column, message.filePath);
+                        break;
                 }
             },
             undefined,
@@ -102,6 +105,39 @@ export class FunctionAnalyzerWebview {
             if (x) {
                 x.dispose();
             }
+        }
+    }
+
+    /**
+     * 変数・関数の定義位置をエディタで開いて表示します。
+     *
+     * @param line 定義行（0始まり）
+     * @param column 定義列（0始まり）
+     * @param filePath 定義があるファイル。未指定の場合は解析対象ファイル自身
+     */
+    private async _revealDefinition(line: number, column: number, filePath?: string) {
+        // 定義先ファイルの決定（インクルードファイル内でなければ解析対象ファイル）
+        const targetPath = filePath || this._result.filePath;
+        if (!targetPath) {
+            vscode.window.showWarningMessage('定義位置のファイルを特定できませんでした。');
+            return;
+        }
+
+        try {
+            const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(targetPath));
+            const editor = await vscode.window.showTextDocument(document, {
+                viewColumn: vscode.ViewColumn.One,
+                preserveFocus: false
+            });
+
+            const position = new vscode.Position(line, column);
+            editor.selection = new vscode.Selection(position, position);
+            editor.revealRange(
+                new vscode.Range(position, position),
+                vscode.TextEditorRevealType.InCenterIfOutsideViewport
+            );
+        } catch (err) {
+            vscode.window.showErrorMessage(`定義位置を開けませんでした: ${err}`);
         }
     }
 

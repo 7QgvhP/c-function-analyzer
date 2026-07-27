@@ -406,7 +406,7 @@ int run(void) {
 }
 `, 'int run(');
         assert.ok(!names(r.inputs).includes('compute'), `入力に compute が含まれないこと: ${names(r.inputs)}`);
-        assert.ok(r.calledFunctions.includes('compute'), `呼び出し関数に compute が含まれること: ${r.calledFunctions}`);
+        assert.ok(names(r.calledFunctions).includes('compute'), `呼び出し関数に compute が含まれること: ${names(r.calledFunctions)}`);
     });
 
     test('除外リストの識別子 (NULL など) は入力に分類されない', async () => {
@@ -494,7 +494,7 @@ void work(void) {
     log_message("hello");
 }
 `, 'void work(');
-        assert.ok(r.calledFunctions.includes('log_message'), `呼び出し関数に log_message が含まれること: ${r.calledFunctions}`);
+        assert.ok(names(r.calledFunctions).includes('log_message'), `呼び出し関数に log_message が含まれること: ${names(r.calledFunctions)}`);
     });
 
     test('関数ポインタ経由の呼び出しは呼び出し関数から除外する (v1.5.2)', async () => {
@@ -504,7 +504,7 @@ void work(void) {
     int result = fp(1);
 }
 `, 'void work(');
-        assert.ok(!r.calledFunctions.includes('fp'), `呼び出し関数に fp が含まれないこと: ${r.calledFunctions}`);
+        assert.ok(!names(r.calledFunctions).includes('fp'), `呼び出し関数に fp が含まれないこと: ${names(r.calledFunctions)}`);
         assert.ok(!names(r.inputs).includes('fp'), `入力に fp が含まれないこと: ${names(r.inputs)}`);
     });
 
@@ -518,8 +518,8 @@ void work(void) {
     helper(3);
 }
 `, 'void work(');
-        const occurrences = r.calledFunctions.filter(f => f === 'helper');
-        assert.equal(occurrences.length, 1, `helper が1件のみであること: ${r.calledFunctions}`);
+        const occurrences = names(r.calledFunctions).filter(f => f === 'helper');
+        assert.equal(occurrences.length, 1, `helper が1件のみであること: ${names(r.calledFunctions)}`);
     });
 });
 
@@ -530,8 +530,8 @@ void work(void) {
     LOG_MSG("hello");
 }
 `, 'void work(');
-        assert.ok(r.macroFunctions?.includes('LOG_MSG'), `マクロ関数に LOG_MSG が含まれること: ${r.macroFunctions}`);
-        assert.ok(!r.calledFunctions.includes('LOG_MSG'), '通常の呼び出し関数には含まれないこと');
+        assert.ok(names(r.macroFunctions ?? []).includes('LOG_MSG'), `マクロ関数に LOG_MSG が含まれること: ${names(r.macroFunctions ?? [])}`);
+        assert.ok(!names(r.calledFunctions).includes('LOG_MSG'), '通常の呼び出し関数には含まれないこと');
     });
 
     test('大文字のみのグローバル参照をマクロ変数に分類する (v1.3.0)', async () => {
@@ -552,9 +552,132 @@ void work(void) {
 }
 `, 'void work(', false);
         assert.ok(names(r.inputs).includes('MAX_LIMIT'), `入力に MAX_LIMIT が含まれること: ${names(r.inputs)}`);
-        assert.ok(r.calledFunctions.includes('LOG_MSG'), `呼び出し関数に LOG_MSG が含まれること: ${r.calledFunctions}`);
+        assert.ok(names(r.calledFunctions).includes('LOG_MSG'), `呼び出し関数に LOG_MSG が含まれること: ${names(r.calledFunctions)}`);
         assert.deepEqual(r.macroVariables, [], 'マクロ変数は空であること');
         assert.deepEqual(r.macroFunctions, [], 'マクロ関数は空であること');
+    });
+});
+
+describe('フェーズ5: 定義位置の記録', () => {
+    test('引数の宣言位置を記録する', async () => {
+        const r = await analyzeOrThrow(`
+int calc(int base, float ratio) {
+    return base;
+}
+`, 'int calc(');
+        // シグネチャは2行目（0始まりで1行目）。"int calc(int base" の base は列13
+        const base = findVar(r.inputs, 'base');
+        assert.ok(base?.definition, 'base に定義位置が記録されること');
+        assert.equal(base.definition.line, 1);
+        assert.equal(base.definition.column, 13);
+        assert.equal(base.definition.filePath, undefined, '同一ファイル内のため filePath は未設定');
+
+        const ratio = findVar(r.inputs, 'ratio');
+        assert.ok(ratio?.definition, 'ratio に定義位置が記録されること');
+        assert.equal(ratio.definition.line, 1);
+    });
+
+    test('ローカル変数の宣言位置を記録する', async () => {
+        const r = await analyzeOrThrow(`
+void work(void) {
+    int first = 1;
+    int second = 2;
+}
+`, 'void work(');
+        assert.equal(findVar(r.internalVariables, 'first')?.definition?.line, 2);
+        assert.equal(findVar(r.internalVariables, 'second')?.definition?.line, 3);
+    });
+
+    test('グローバル変数の宣言位置を記録する', async () => {
+        const r = await analyzeOrThrow(`
+int threshold = 100;
+
+int check(int v) {
+    return v > threshold;
+}
+`, 'int check(');
+        const g = findVar(r.inputs, 'threshold');
+        assert.ok(g?.definition, 'threshold に定義位置が記録されること');
+        assert.equal(g.definition.line, 1);
+        assert.equal(g.definition.column, 4, '型名 "int " の後ろの列を指すこと');
+    });
+
+    test('ファイル内に定義がないグローバル変数には定義位置を記録しない', async () => {
+        const r = await analyzeOrThrow(`
+void publish(void) {
+    external_flag = 1;
+}
+`, 'void publish(');
+        const g = findVar(r.outputs, 'external_flag');
+        assert.ok(g, '出力に external_flag が含まれること');
+        assert.equal(g.definition, undefined, '定義位置は未設定であること');
+    });
+
+    test('「戻り値 (return)」には定義位置を記録しない', async () => {
+        const r = await analyzeOrThrow(`
+int one(void) {
+    return 1;
+}
+`, 'int one(');
+        const ret = findVar(r.outputs, '戻り値 (return)');
+        assert.ok(ret, '「戻り値 (return)」が存在すること');
+        assert.equal(ret.definition, undefined);
+    });
+
+    test('同一ファイル内で定義された呼び出し関数の定義位置を記録する', async () => {
+        const r = await analyzeOrThrow(`
+int helper(int x) {
+    return x;
+}
+
+int work(void) {
+    return helper(1);
+}
+`, 'int work(');
+        const helper = r.calledFunctions.find(f => f.name === 'helper');
+        assert.ok(helper?.definition, 'helper に定義位置が記録されること');
+        assert.equal(helper.definition.line, 1);
+    });
+
+    test('プロトタイプ宣言のみの呼び出し関数はその宣言位置を記録する', async () => {
+        const r = await analyzeOrThrow(`
+void log_message(const char *m);
+
+void work(void) {
+    log_message("hello");
+}
+`, 'void work(');
+        const fn = r.calledFunctions.find(f => f.name === 'log_message');
+        assert.ok(fn?.definition, 'log_message に定義位置が記録されること');
+        assert.equal(fn.definition.line, 1);
+    });
+
+    test('定義が見つからない呼び出し関数には定義位置を記録しない', async () => {
+        const r = await analyzeOrThrow(`
+void work(void) {
+    printf("hello");
+}
+`, 'void work(');
+        const fn = r.calledFunctions.find(f => f.name === 'printf');
+        assert.ok(fn, '呼び出し関数に printf が含まれること');
+        assert.equal(fn.definition, undefined, '定義位置は未設定であること');
+    });
+
+    test('定義とプロトタイプ宣言の両方がある場合は定義側を優先する', async () => {
+        const r = await analyzeOrThrow(`
+int helper(int x);
+
+int helper(int x) {
+    return x;
+}
+
+int work(void) {
+    return helper(1);
+}
+`, 'int work(');
+        const helper = r.calledFunctions.find(f => f.name === 'helper');
+        assert.ok(helper?.definition, 'helper に定義位置が記録されること');
+        assert.equal(helper.definition.line, 3, 'プロトタイプ(1行目)ではなく定義(3行目)を指すこと');
     });
 });
 
@@ -570,7 +693,7 @@ void work(void) {
     helper();
 }
 `, 'void work(');
-        assert.ok(r.calledFunctions.includes('helper'), `呼び出し関数に helper が含まれること: ${r.calledFunctions}`);
+        assert.ok(names(r.calledFunctions).includes('helper'), `呼び出し関数に helper が含まれること: ${names(r.calledFunctions)}`);
         assert.ok(!names(r.inputs).includes('helper'), `入力に helper が含まれないこと: ${names(r.inputs)}`);
     });
 

@@ -1,6 +1,21 @@
 import Parser = require('web-tree-sitter');
 
 // 解析結果を保持するインターフェース定義
+
+/**
+ * シンボルが宣言・定義されている位置です。
+ *
+ * `filePath` を省略した場合は解析対象ファイル自身を指します
+ * （インクルードファイル内の定義を指す場合のみ設定されます）。
+ */
+export interface DefinitionLocation {
+    filePath?: string;
+    /** 行番号（0始まり） */
+    line: number;
+    /** 列番号（0始まり） */
+    column: number;
+}
+
 export interface VariableInfo {
     name: string;
     type: string;
@@ -10,6 +25,16 @@ export interface VariableInfo {
      * 省略時は true として扱います（「戻り値 (return)」など実体のない項目のみ false）。
      */
     highlightable?: boolean;
+    /** 宣言・定義されている位置。特定できなかった場合は未設定 */
+    definition?: DefinitionLocation;
+}
+
+/** 呼び出し関数・マクロ関数の情報 */
+export interface FunctionInfo {
+    /** 表示名（マクロ関数を含む） */
+    name: string;
+    /** 宣言・定義されている位置。特定できなかった場合は未設定 */
+    definition?: DefinitionLocation;
 }
 
 export interface AnalysisResult {
@@ -18,9 +43,9 @@ export interface AnalysisResult {
     inputs: VariableInfo[];
     outputs: VariableInfo[];
     internalVariables: VariableInfo[];
-    calledFunctions: string[];
+    calledFunctions: FunctionInfo[];
     macroVariables?: VariableInfo[];
-    macroFunctions?: string[];
+    macroFunctions?: FunctionInfo[];
     startLine: number;
     endLine: number;
     filePath?: string;
@@ -46,6 +71,16 @@ interface ParamInfo {
     arrayDepth: number;
     /** ポインタまたは配列（＝デレファレンスによる書き込みが可能）か */
     isPointer: boolean;
+    /** 引数が宣言されている位置 */
+    definition: DefinitionLocation;
+}
+
+/** 宣言された変数の情報（ローカル変数・ファイルスコープ変数で共用） */
+interface DeclaredVar {
+    /** 型名（ポインタのアスタリスクを含む） */
+    type: string;
+    /** 宣言されている位置 */
+    definition: DefinitionLocation;
 }
 
 /** フェーズ3: 関数シグネチャの解析結果 */
@@ -57,8 +92,8 @@ interface SignatureInfo {
 
 /** フェーズ4: 関数ボディの走査で収集した生データ */
 interface BodyAnalysis {
-    /** ローカル変数（名前 → 型名） */
-    localVars: Map<string, string>;
+    /** ローカル変数（名前 → 型名と宣言位置） */
+    localVars: Map<string, DeclaredVar>;
     /** 直接呼び出されている関数名 */
     calledFunctions: Set<string>;
     /** 読み取られているグローバル変数のアクセスパス */
@@ -84,6 +119,26 @@ interface DeclaratorInfo {
      * 関数宣言・関数ポインタ宣言でない場合は null になります。
      */
     ownerFunctionDeclarator: Parser.SyntaxNode | null;
+    /** 識別子ノードの位置。名前が解決できなかった場合は null */
+    position: DefinitionLocation | null;
+}
+
+/**
+ * ASTノードの開始位置を定義位置として取り出します。
+ *
+ * @param node 対象ノード
+ * @param filePath インクルードファイル内の場合はそのパス（解析対象ファイル自身なら省略）
+ * @returns 定義位置
+ */
+function toDefinitionLocation(node: Parser.SyntaxNode, filePath?: string): DefinitionLocation {
+    const location: DefinitionLocation = {
+        line: node.startPosition.row,
+        column: node.startPosition.column
+    };
+    if (filePath) {
+        location.filePath = filePath;
+    }
+    return location;
 }
 
 /**
@@ -105,11 +160,12 @@ function walk(node: Parser.SyntaxNode, callback: (node: Parser.SyntaxNode) => vo
  * @param node 宣言子ノード（pointer_declarator, array_declarator, function_declarator など）
  * @returns 識別子名とポインタ・配列の深さ、および引数リストを保持する function_declarator
  */
-function resolveDeclarator(node: Parser.SyntaxNode): DeclaratorInfo {
+function resolveDeclarator(node: Parser.SyntaxNode, filePath?: string): DeclaratorInfo {
     let name = '';
     let pointerDepth = 0;
     let arrayDepth = 0;
     let ownerFunctionDeclarator: Parser.SyntaxNode | null = null;
+    let position: DefinitionLocation | null = null;
 
     let current: Parser.SyntaxNode | null = node;
     while (current) {
@@ -122,6 +178,7 @@ function resolveDeclarator(node: Parser.SyntaxNode): DeclaratorInfo {
             ownerFunctionDeclarator = current;
         } else if (current.type === 'identifier') {
             name = current.text;
+            position = toDefinitionLocation(current, filePath);
             break;
         }
 
@@ -137,7 +194,7 @@ function resolveDeclarator(node: Parser.SyntaxNode): DeclaratorInfo {
         current = next;
     }
 
-    return { name, pointerDepth, arrayDepth, ownerFunctionDeclarator };
+    return { name, pointerDepth, arrayDepth, ownerFunctionDeclarator, position };
 }
 
 /**
@@ -165,8 +222,13 @@ function cleanTypeText(text: string): string {
  *
  * @param declNode declaration ノード
  * @param into 登録先のマップ（同名が既に登録されている場合は上書きしません）
+ * @param filePath インクルードファイル内の宣言の場合はそのパス
  */
-function collectDeclaredVars(declNode: Parser.SyntaxNode, into: Map<string, string>): void {
+function collectDeclaredVars(
+    declNode: Parser.SyntaxNode,
+    into: Map<string, DeclaredVar>,
+    filePath?: string
+): void {
     const typeNode = declNode.childForFieldName('type') || declNode.child(0);
     if (!typeNode) {
         return;
@@ -186,8 +248,8 @@ function collectDeclaredVars(declNode: Parser.SyntaxNode, into: Map<string, stri
             decl = child.childForFieldName('declarator') || child.child(0)!;
         }
 
-        const info = resolveDeclarator(decl);
-        if (!info.name) {
+        const info = resolveDeclarator(decl, filePath);
+        if (!info.name || !info.position) {
             continue;
         }
 
@@ -201,46 +263,58 @@ function collectDeclaredVars(declNode: Parser.SyntaxNode, into: Map<string, stri
             continue;
         }
 
-        into.set(info.name, typeText + (info.pointerDepth > 0 ? '*' : ''));
+        into.set(info.name, {
+            type: typeText + (info.pointerDepth > 0 ? '*' : ''),
+            definition: info.position
+        });
     }
 }
 
 /**
- * フェーズ1: ファイル直下の変数宣言をスキャンし、グローバル変数の型情報を収集します。
+ * フェーズ1: ファイル直下の変数宣言をスキャンし、グローバル変数の型情報と宣言位置を収集します。
  *
  * @param rootNode ASTのルートノード
- * @returns 変数名 → 型名 のマップ
+ * @param filePath インクルードファイルの場合はそのパス
+ * @returns 変数名 → 型名と宣言位置 のマップ
  */
-function collectFileScopeVars(rootNode: Parser.SyntaxNode): Map<string, string> {
-    const fileScopeVars = new Map<string, string>();
+function collectFileScopeVars(
+    rootNode: Parser.SyntaxNode,
+    filePath?: string
+): Map<string, DeclaredVar> {
+    const fileScopeVars = new Map<string, DeclaredVar>();
     rootNode.children.forEach(node => {
         if (node.type === 'declaration') {
-            collectDeclaredVars(node, fileScopeVars);
+            collectDeclaredVars(node, fileScopeVars, filePath);
         }
     });
     return fileScopeVars;
 }
 
 /**
- * フェーズ1: ファイル内で宣言・定義されている関数の名前を収集します。
+ * フェーズ1: ファイル内で宣言・定義されている関数の名前と位置を収集します。
  *
  * 関数名は変数ではないため、値として参照されているだけ（関数ポインタへの代入など）の場合に
- * グローバル変数と誤分類しないよう、除外用の名前一覧として使用します。
+ * グローバル変数と誤分類しないよう、除外用の名前一覧としても使用します。
  *
  * @param rootNode ASTのルートノード
- * @returns 関数名の集合
+ * @param filePath インクルードファイルの場合はそのパス
+ * @returns 関数名 → 定義位置 のマップ
  */
-function collectFileScopeFunctions(rootNode: Parser.SyntaxNode): Set<string> {
-    const functionNames = new Set<string>();
+function collectFileScopeFunctions(
+    rootNode: Parser.SyntaxNode,
+    filePath?: string
+): Map<string, DefinitionLocation> {
+    const functionNames = new Map<string, DefinitionLocation>();
 
     rootNode.children.forEach(node => {
         // 関数定義: int helper(int x) { ... }
         if (node.type === 'function_definition') {
             const declaratorNode = node.childForFieldName('declarator');
             if (declaratorNode) {
-                const info = resolveDeclarator(declaratorNode);
-                if (info.name) {
-                    functionNames.add(info.name);
+                const info = resolveDeclarator(declaratorNode, filePath);
+                if (info.name && info.position) {
+                    // 定義は宣言より優先するため上書きする
+                    functionNames.set(info.name, info.position);
                 }
             }
             return;
@@ -255,9 +329,9 @@ function collectFileScopeFunctions(rootNode: Parser.SyntaxNode): Set<string> {
                 if (child.type !== 'function_declarator') {
                     continue;
                 }
-                const info = resolveDeclarator(child);
-                if (info.name && info.pointerDepth === 0) {
-                    functionNames.add(info.name);
+                const info = resolveDeclarator(child, filePath);
+                if (info.name && info.position && info.pointerDepth === 0 && !functionNames.has(info.name)) {
+                    functionNames.set(info.name, info.position);
                 }
             }
         }
@@ -356,7 +430,7 @@ function parseSignature(funcNode: Parser.SyntaxNode): SignatureInfo {
             }
 
             const info = resolveDeclarator(declNode);
-            if (!info.name) {
+            if (!info.name || !info.position) {
                 continue;
             }
 
@@ -373,7 +447,8 @@ function parseSignature(funcNode: Parser.SyntaxNode): SignatureInfo {
                 pointerDepth: info.pointerDepth,
                 arrayDepth: info.arrayDepth,
                 // ポインタ宣言および配列宣言をポインタ（書き込み可能）として認識
-                isPointer: info.pointerDepth > 0 || info.arrayDepth > 0
+                isPointer: info.pointerDepth > 0 || info.arrayDepth > 0,
+                definition: info.position
             });
         }
     }
@@ -391,10 +466,10 @@ function parseSignature(funcNode: Parser.SyntaxNode): SignatureInfo {
 function analyzeBody(
     bodyNode: Parser.SyntaxNode | null,
     params: ParamInfo[],
-    fileScopeFunctions: Set<string>
+    fileScopeFunctions: Map<string, DefinitionLocation>
 ): BodyAnalysis {
     // 解析中に見つかったローカル変数、グローバル変数、呼び出し関数を格納するセット
-    const localVars = new Map<string, string>(); // name -> type
+    const localVars = new Map<string, DeclaredVar>(); // name -> 型名と宣言位置
     const calledFunctionsSet = new Set<string>();
 
     // グローバル変数の出現箇所を記録する
@@ -517,7 +592,8 @@ function analyzeBody(
  * @param funcNode function_definition ノード（行範囲の取得に使用）
  * @param signature フェーズ3のシグネチャ解析結果
  * @param body フェーズ4のボディ解析結果
- * @param fileScopeVars フェーズ1で収集したグローバル変数の型情報
+ * @param fileScopeVars フェーズ1で収集したグローバル変数の型情報と宣言位置
+ * @param fileScopeFunctions フェーズ1で収集した関数名と定義位置
  * @param classifyAllUppercaseAsMacros 大文字のみの識別子をマクロとして分類するか
  * @returns 最終的な解析結果
  */
@@ -525,7 +601,8 @@ function buildResult(
     funcNode: Parser.SyntaxNode,
     signature: SignatureInfo,
     body: BodyAnalysis,
-    fileScopeVars: Map<string, string>,
+    fileScopeVars: Map<string, DeclaredVar>,
+    fileScopeFunctions: Map<string, DefinitionLocation>,
     classifyAllUppercaseAsMacros: boolean
 ): AnalysisResult {
     const { functionName, returnType, params } = signature;
@@ -534,15 +611,22 @@ function buildResult(
     const inputs: VariableInfo[] = [];
     const outputs: VariableInfo[] = [];
     const macroVariables: VariableInfo[] = [];
-    const macroFunctions: string[] = [];
-    const normalCalledFunctions: string[] = [];
+    const macroFunctions: FunctionInfo[] = [];
+    const normalCalledFunctions: FunctionInfo[] = [];
 
     // 呼び出し関数の大文字マクロ分類
     calledFunctions.forEach(func => {
+        const info: FunctionInfo = { name: func };
+        // ファイル内に定義・宣言があれば、その位置をジャンプ先として持たせる
+        const definition = fileScopeFunctions.get(func);
+        if (definition) {
+            info.definition = definition;
+        }
+
         if (classifyAllUppercaseAsMacros && isAllUppercase(func)) {
-            macroFunctions.push(func);
+            macroFunctions.push(info);
         } else {
-            normalCalledFunctions.push(func);
+            normalCalledFunctions.push(info);
         }
     });
 
@@ -561,7 +645,8 @@ function buildResult(
                     outputs.push({
                         name: path,
                         type: fullType,
-                        details: '出力引数（ポインタ書き込みあり）'
+                        details: '出力引数（ポインタ書き込みあり）',
+                        definition: p.definition
                     });
                 });
             }
@@ -571,7 +656,8 @@ function buildResult(
                     inputs.push({
                         name: path,
                         type: fullType,
-                        details: '入力引数（ポインタ読み取りあり）'
+                        details: '入力引数（ポインタ読み取りあり）',
+                        definition: p.definition
                     });
                 });
             }
@@ -580,14 +666,16 @@ function buildResult(
                 inputs.push({
                     name: p.name,
                     type: fullType,
-                    details: '入力引数（ポインタ読み取りあり）'
+                    details: '入力引数（ポインタ読み取りあり）',
+                    definition: p.definition
                 });
             }
         } else {
             inputs.push({
                 name: p.name,
                 type: fullType,
-                details: '入力引数（値渡し）'
+                details: '入力引数（値渡し）',
+                definition: p.definition
             });
         }
     });
@@ -630,11 +718,16 @@ function buildResult(
                     details: macroDetails
                 });
             } else {
-                target.push({
+                const declared = fileScopeVars.get(rootName);
+                const entry: VariableInfo = {
                     name: path,
-                    type: fileScopeVars.get(rootName) || 'global (推定)',
+                    type: declared ? declared.type : 'global (推定)',
                     details
-                });
+                };
+                if (declared) {
+                    entry.definition = declared.definition;
+                }
+                target.push(entry);
             }
         });
     };
@@ -644,8 +737,12 @@ function buildResult(
 
     // 内部（ローカル）変数のリスト化
     const internalVariables: VariableInfo[] = [];
-    localVars.forEach((type, name) => {
-        internalVariables.push({ name, type });
+    localVars.forEach((declared, name) => {
+        internalVariables.push({
+            name,
+            type: declared.type,
+            definition: declared.definition
+        });
     });
 
     return {
@@ -695,7 +792,7 @@ export function analyzeCFunction(
     const signature = parseSignature(funcNode);
     const body = analyzeBody(funcNode.childForFieldName('body'), signature.params, fileScopeFunctions);
 
-    return buildResult(funcNode, signature, body, fileScopeVars, classifyAllUppercaseAsMacros);
+    return buildResult(funcNode, signature, body, fileScopeVars, fileScopeFunctions, classifyAllUppercaseAsMacros);
 }
 
 /**
@@ -795,7 +892,7 @@ function resolveLhsVariable(node: Parser.SyntaxNode): { rootName: string; path: 
 function checkLhsWrites(
     node: Parser.SyntaxNode,
     params: ParamInfo[],
-    localVars: Map<string, string>,
+    localVars: Map<string, DeclaredVar>,
     pointerWrites: Set<string>,
     globalVarWrites: Set<string>
 ) {
