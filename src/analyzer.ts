@@ -102,8 +102,10 @@ interface ParamInfo {
 
 /** 宣言された変数の情報（ローカル変数・ファイルスコープ変数で共用） */
 interface DeclaredVar {
-    /** 型名（ポインタのアスタリスクを含む） */
+    /** 型名（ポインタのアスタリスクを含む。配列の次元は含まない） */
     type: string;
+    /** 配列の各次元のサイズ（内側から順）。配列でない場合は空配列 */
+    arrayDimensions: string[];
     /** 宣言されている位置 */
     definition: DefinitionLocation;
 }
@@ -167,10 +169,10 @@ interface DeclaratorInfo {
     /** 配列宣言（[]）の深さ */
     arrayDepth: number;
     /**
-     * 配列の次元を表す型名の接尾辞（例: `[5]`、`[3][4]`、`[]`）。
-     * 配列でない場合は空文字列です。
+     * 配列の各次元のサイズ（内側から順、例: `int grid[3][4]` なら `['3', '4']`）。
+     * サイズ指定のない次元（`int buf[]`）は空文字列になります。配列でない場合は空配列です。
      */
-    arraySuffix: string;
+    arrayDimensions: string[];
     /**
      * 識別子に到達する直前に通過した function_declarator。
      * 関数宣言・関数ポインタ宣言でない場合は null になります。
@@ -290,13 +292,44 @@ function resolveDeclarator(node: Parser.SyntaxNode, filePath?: string): Declarat
         current = next;
     }
 
-    // 内側の次元から順に並べ直して型名の接尾辞にする（int grid[3][4] → "[3][4]"）
-    const arraySuffix = arrayDimensions
-        .reverse()
-        .map(size => `[${size}]`)
-        .join('');
+    // 宣言と同じ並び（内側の次元が先）に戻す（int grid[3][4] → ['3', '4']）
+    arrayDimensions.reverse();
 
-    return { name, pointerDepth, arrayDepth, arraySuffix, ownerFunctionDeclarator, position };
+    return { name, pointerDepth, arrayDepth, arrayDimensions, ownerFunctionDeclarator, position };
+}
+
+/**
+ * 型名に配列の次元を付与します。
+ *
+ * @param baseType 配列表記を含まない型名（例: `int`、`int*`）
+ * @param dimensions 配列の各次元のサイズ
+ * @returns 配列表記を付与した型名（例: `int[5]`、`int[3][4]`、`char[]`）
+ */
+function formatArrayType(baseType: string, dimensions: string[]): string {
+    return baseType + dimensions.map(size => `[${size}]`).join('');
+}
+
+/**
+ * アクセスパス中の正規化された添字 `[]` を、宣言された配列の次元で置き換えます。
+ *
+ * 例: `hoge[]` と宣言 `int hoge[N]` から `hoge[N]`、
+ *     `tbl[].id` と宣言 `HOGESTRUCT tbl[5]` から `tbl[5].id` を生成します。
+ * 宣言の次元が不明な場合や、パスの添字数が次元数を超える場合は `[]` のままとします。
+ *
+ * @param accessPath アクセスパス（例: `hoge[]`、`grid[][]`、`tbl[].id`）
+ * @param dimensions 宣言された配列の各次元のサイズ
+ * @returns 次元を反映したアクセスパス
+ */
+function applyArrayDimensions(accessPath: string, dimensions: string[]): string {
+    if (dimensions.length === 0) {
+        return accessPath;
+    }
+    let index = 0;
+    return accessPath.replace(/\[\]/g, () => {
+        const size = index < dimensions.length ? dimensions[index] : '';
+        index++;
+        return `[${size}]`;
+    });
 }
 
 /**
@@ -365,10 +398,11 @@ function collectDeclaredVars(
             continue;
         }
 
-        // 宣言された型をそのまま表す（例: int / int* / int[5] / int[3][4] / int*[8]）。
-        // 引数の配列は C の仕様上ポインタへ減衰するため、引数側は別途 '*' 表記としている。
+        // 配列の次元は型名に含めず別途保持する。
+        // 表示時に、名前（アクセスパス）側と型名側のどちらへ次元を出すかを切り替えるため。
         into.set(info.name, {
-            type: typeText + (info.pointerDepth > 0 ? '*' : '') + info.arraySuffix,
+            type: typeText + (info.pointerDepth > 0 ? '*' : ''),
+            arrayDimensions: info.arrayDimensions,
             definition: info.position
         });
     }
@@ -992,9 +1026,15 @@ function buildResult(
                 macroVariables.push(entry);
             } else {
                 const declared = symbols.vars.get(rootName);
+                // 配列の次元は名前か型名のどちらか一方にのみ表示する。
+                // 添字でアクセスされている場合は名前側（hoge[N]）へ、
+                // 添字なしで参照されている場合は型名側（int[N]）へ出す。
+                const hasSubscript = path.includes('[]');
                 const entry: VariableInfo = {
-                    name: path,
-                    type: declared ? declared.type : 'global (推定)',
+                    name: declared ? applyArrayDimensions(path, declared.arrayDimensions) : path,
+                    type: declared
+                        ? (hasSubscript ? declared.type : formatArrayType(declared.type, declared.arrayDimensions))
+                        : 'global (推定)',
                     details
                 };
                 if (declared) {
@@ -1009,11 +1049,12 @@ function buildResult(
     classifyGlobalVars(globalVarReads, inputs, 'マクロ変数からの読み取り', 'グローバル変数からの読み取り');
 
     // 内部（ローカル）変数のリスト化
+    // 名前は宣言名そのもの（添字を含まない）のため、配列の次元は型名側へ表示する
     const internalVariables: VariableInfo[] = [];
     localVars.forEach((declared, name) => {
         internalVariables.push({
             name,
-            type: declared.type,
+            type: formatArrayType(declared.type, declared.arrayDimensions),
             definition: declared.definition
         });
     });

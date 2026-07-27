@@ -300,7 +300,7 @@ void tick(void) {
         assert.ok(names(r.outputs).includes('counter'), '出力に counter が含まれること');
     });
 
-    test('グローバル配列への書き込みを検出しアクセスパスを正規化する (v1.13.4)', async () => {
+    test('グローバル配列への書き込みを検出し宣言された次元を表示する (v1.13.4 / v2.3.0)', async () => {
         const r = await analyzeOrThrow(`
 int hoge[10];
 
@@ -308,7 +308,8 @@ void fill(void) {
     hoge[0] = 3;
 }
 `, 'void fill(');
-        assert.ok(names(r.outputs).includes('hoge[]'), `出力に hoge[] が含まれること: ${names(r.outputs)}`);
+        assert.ok(names(r.outputs).includes('hoge[10]'), `出力に hoge[10] が含まれること: ${names(r.outputs)}`);
+        assert.equal(findVar(r.outputs, 'hoge[10]')?.type, 'int', '名前側に次元があるため型は int とすること');
     });
 
     test('グローバル構造体配列のメンバ書き込みを検出する (v1.13.4 / v1.15.0)', async () => {
@@ -320,10 +321,10 @@ void update(void) {
     hogestruct[0].a = 100;
 }
 `, 'void update(');
-        assert.ok(names(r.outputs).includes('hogestruct[].a'), `出力に hogestruct[].a が含まれること: ${names(r.outputs)}`);
+        assert.ok(names(r.outputs).includes('hogestruct[5].a'), `出力に hogestruct[5].a が含まれること: ${names(r.outputs)}`);
     });
 
-    test('多次元配列のアクセスパスを [][] に正規化する (v1.15.0)', async () => {
+    test('多次元配列のアクセスパスに宣言された次元を反映する (v1.15.0 / v2.3.0)', async () => {
         const r = await analyzeOrThrow(`
 int grid[3][4];
 
@@ -331,7 +332,49 @@ void fill(void) {
     grid[1][2] = 20;
 }
 `, 'void fill(');
-        assert.ok(names(r.outputs).includes('grid[][]'), `出力に grid[][] が含まれること: ${names(r.outputs)}`);
+        assert.ok(names(r.outputs).includes('grid[3][4]'), `出力に grid[3][4] が含まれること: ${names(r.outputs)}`);
+    });
+
+    test('マクロ定数で宣言された配列の次元をそのまま表示する (v2.3.0)', async () => {
+        const r = await analyzeOrThrow(`
+#define N 16
+int hoge[N];
+
+void fill(int i) {
+    hoge[2] = 3;
+    hoge[i] = 4;
+}
+`, 'void fill(');
+        // 添字の値によらず、宣言された次元 N で1件に集約される
+        const matched = names(r.outputs).filter(n => n.startsWith('hoge'));
+        assert.deepEqual(matched, ['hoge[N]'], `hoge[N] の1件に集約されること: ${names(r.outputs)}`);
+    });
+
+    test('宣言の次元が不明な配列は [] のままとする (v2.3.0)', async () => {
+        const r = await analyzeOrThrow(`
+extern int buf[];
+int *ptr;
+
+void fill(void) {
+    buf[0] = 1;
+    ptr[0] = 2;
+}
+`, 'void fill(');
+        assert.ok(names(r.outputs).includes('buf[]'), `サイズ省略の配列は buf[] のままであること: ${names(r.outputs)}`);
+        assert.ok(names(r.outputs).includes('ptr[]'), `ポインタは ptr[] のままであること: ${names(r.outputs)}`);
+    });
+
+    test('添字なしで参照される配列は型名側に次元を表示する (v2.3.0)', async () => {
+        const r = await analyzeOrThrow(`
+int table[8];
+
+int sum(void) {
+    return total(table);
+}
+`, 'int sum(');
+        const g = findVar(r.inputs, 'table');
+        assert.ok(g, `入力に table が含まれること: ${names(r.inputs)}`);
+        assert.equal(g.type, 'int[8]', '名前に添字がないため型側に次元を出すこと');
     });
 
     test('アロー演算子とメンバアクセスのパスを保持する (v1.15.0)', async () => {
@@ -382,19 +425,6 @@ void update(void) {
         const g = findVar(r.outputs, 'global_data.x');
         assert.ok(g, `出力に global_data.x が含まれること: ${names(r.outputs)}`);
         assert.ok(!g.type.includes('{'), `型名に波括弧が含まれないこと: ${g.type}`);
-    });
-
-    test('グローバル配列の型にも次元とサイズを表示する (v2.2.1)', async () => {
-        const r = await analyzeOrThrow(`
-int global_arr[10];
-
-void fill(void) {
-    global_arr[0] = 5;
-}
-`, 'void fill(');
-        const g = findVar(r.outputs, 'global_arr[]');
-        assert.ok(g, `出力に global_arr[] が含まれること: ${names(r.outputs)}`);
-        assert.equal(g.type, 'int[10]');
     });
 
     test('引数の配列はポインタ表記のままとする (v2.2.1)', async () => {

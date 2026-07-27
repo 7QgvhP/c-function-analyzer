@@ -58,6 +58,36 @@ describe('buildHighlightRegex', () => {
         assert.deepEqual(matchAll('grid[][]', '    grid[1][2] = 20;'), ['grid[1][2]']);
     });
 
+    test('宣言された次元を含む項目名でも任意の添字にマッチする (v2.3.0)', () => {
+        // 表示名が hoge[N] でも、コード上の実際の添字にマッチする必要がある
+        assert.deepEqual(matchAll('hoge[N]', '    hoge[2] = 10;'), ['hoge[2]']);
+        assert.deepEqual(matchAll('hoge[N]', '    hoge[i] = 20;'), ['hoge[i]']);
+        assert.deepEqual(matchAll('hoge[N]', '    val = hoge[N - 1];'), ['hoge[N - 1]']);
+        assert.deepEqual(matchAll('hoge[N]', '    int hoge[N];'), ['hoge[N]']);
+    });
+
+    test('宣言された次元を含む多次元・構造体パスにもマッチする (v2.3.0)', () => {
+        assert.deepEqual(matchAll('grid[3][4]', '    grid[1][2] = 20;'), ['grid[1][2]']);
+        assert.deepEqual(matchAll('tbl[5].id', '    tbl[0].id = 1;'), ['tbl[0].id']);
+    });
+
+    test('添字を含む項目名は添字なしの参照にはマッチしない (v2.3.0)', () => {
+        // 配列全体を渡す用法は対象外（従来の [] 表記と同じ挙動）
+        assert.deepEqual(matchAll('hoge[N]', '    memcpy(dst, hoge, n);'), []);
+    });
+
+    test('添字の中に空白や演算子を含む項目名でもマッチする (v2.3.0)', () => {
+        // int buf[MAX + 1]; のように次元が式である場合、表示名にも空白が含まれる
+        assert.deepEqual(matchAll('buf[MAX + 1]', '    buf[0] = 1;'), ['buf[0]']);
+        assert.deepEqual(matchAll('buf[MAX + 1]', '    buf[idx] = 2;'), ['buf[idx]']);
+    });
+
+    test('添字の退避処理が角括弧を含まない名前に影響しない (v2.3.0)', () => {
+        assert.deepEqual(matchAll('data.x', '    dataXx = 1;'), []);
+        assert.deepEqual(matchAll('data.x', '    data.x = 1;'), ['data.x']);
+        assert.deepEqual(matchAll('ptr->member', '    ptr->member = 1;'), ['ptr->member']);
+    });
+
     test('アロー演算子とメンバアクセスを含むパスにマッチする (v1.15.0)', () => {
         assert.deepEqual(matchAll('var_ptr->sub.member', '    var_ptr->sub.member = 30;'), ['var_ptr->sub.member']);
     });
