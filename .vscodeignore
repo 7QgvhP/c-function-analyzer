@@ -7,4 +7,5 @@ scripts/**
 test.c
 test/**
 dist-test/**
+samples/**
 *.vsix
