@@ -21,7 +21,9 @@ export const WEBVIEW_STYLES = `
             padding: 20px;
             box-sizing: border-box;
             line-height: 1.6;
-            min-width: 280px;
+            /* 型名バッジ（140px 固定）・変数名・各ボタンが1行に収まる最小幅。
+               パネルをこれより狭くした場合は折り返さず横スクロールになる。 */
+            min-width: 480px;
         }
 
         /* ヘッダーセクション */
@@ -316,16 +318,9 @@ export const WEBVIEW_STYLES = `
             .section-container {
                 padding: 14px 14px;
             }
-            .variable-info {
-                flex-direction: column;
-                align-items: flex-start;
-                gap: 4px;
-            }
-            .variable-type {
-                /* 狭い幅では型名を変数名の上に折り返して表示するため、固定幅を解除する */
-                flex: 0 1 auto;
-                max-width: 100%;
-            }
+            /* 型名と変数名は狭い幅でも1行に保つ（折り返すと視線が縦に散り、
+               型名バッジの固定幅による変数名の左端揃えも崩れるため）。
+               収まらない場合は変数名を省略表示し、それでも足りなければ横スクロールとする。 */
             .variable-item {
                 padding: 8px 8px;
             }
