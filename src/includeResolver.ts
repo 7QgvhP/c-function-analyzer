@@ -5,10 +5,10 @@
  * 解析ロジック（analyzer.ts）からは分離してこちらに配置しています。
  */
 import * as fs from 'fs';
-import * as path from 'path';
 import * as vscode from 'vscode';
 import Parser = require('web-tree-sitter');
 import { IncludeResolver, ResolvedInclude } from './analyzer';
+import { buildIncludeCandidates } from './includePaths';
 
 /** パース結果のキャッシュエントリ */
 interface CacheEntry {
@@ -62,30 +62,36 @@ export class FileIncludeResolver implements IncludeResolver {
     /**
      * インクルードパスに対応する実ファイルを探します。
      *
-     * 探索順は「インクルード元ファイルのディレクトリ」→「各ワークスペースフォルダの直下」です。
+     * 探索順は「インクルード元ファイルのディレクトリ」→「設定 includePaths」
+     * →「各ワークスペースフォルダの直下」です。
      *
      * @param includePath `#include "..."` に記述されたパス
      * @param fromFilePath インクルード元ファイルのURI文字列
      * @returns 見つかったファイルの絶対パス（fsPath）、見つからなければ null
      */
     private findFile(includePath: string, fromFilePath?: string): string | null {
-        const candidates: string[] = [];
-
-        // 1. インクルード元ファイルからの相対パス
+        let fromFsPath: string | null = null;
         if (fromFilePath) {
             try {
-                const fromFsPath = vscode.Uri.parse(fromFilePath).fsPath;
-                candidates.push(path.resolve(path.dirname(fromFsPath), includePath));
+                fromFsPath = vscode.Uri.parse(fromFilePath).fsPath;
             } catch {
-                // URI として解釈できない場合は候補に加えない
+                // URI として解釈できない場合は起点なしとして扱う
             }
         }
 
-        // 2. 各ワークスペースフォルダの直下
-        const folders = vscode.workspace.workspaceFolders || [];
-        folders.forEach(folder => {
-            candidates.push(path.join(folder.uri.fsPath, includePath));
-        });
+        const folders = (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
+
+        // 設定は変更が即座に反映されるよう、解決のたびに読み取る
+        const configuredPaths = vscode.workspace
+            .getConfiguration('c-function-analyzer')
+            .get<string[]>('includePaths', []);
+
+        const candidates = buildIncludeCandidates(
+            includePath,
+            fromFsPath,
+            folders,
+            Array.isArray(configuredPaths) ? configuredPaths : []
+        );
 
         for (const candidate of candidates) {
             try {

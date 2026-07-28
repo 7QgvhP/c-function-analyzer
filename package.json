@@ -2,7 +2,7 @@
   "name": "c-function-analyzer",
   "displayName": "C Function Analyzer",
   "description": "C言語の選択された関数を簡易解析し、入出力変数や呼び出し関数を別ウィンドウに表示します。",
-  "version": "2.5.0",
+  "version": "2.6.0",
   "publisher": "antigravity",
   "repository": {
     "type": "git",
@@ -48,6 +48,14 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "変数名または関数名がすべて大文字の場合、通常の入出力や呼び出し関数とは別の「マクロ変数」「マクロ関数」カテゴリに分類して表示します。"
+        },
+        "c-function-analyzer.includePaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "`#include \"...\"` を解決する際に追加で探索するディレクトリを指定します。相対パスはワークスペースフォルダからの相対として解決され、絶対パスはそのまま使用されます。\n\n探索順は「インクルード元ファイルのディレクトリ」→「本設定のディレクトリ（記述順）」→「ワークスペースフォルダの直下」です。\n\n例: `[\"include\", \"common/inc\", \"C:/SDK/include\"]`"
         }
       }
     }
@@ -56,7 +64,7 @@
     "vscode:prepublish": "npm run compile",
     "compile": "node scripts/copy-wasm.js && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:web-tree-sitter --format=cjs --platform=node",
     "watch": "node scripts/copy-wasm.js && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:web-tree-sitter --format=cjs --platform=node --watch",
-    "build-test": "esbuild test/analyzer.test.ts test/highlight.test.ts test/webviewHtml.test.ts test/includeResolution.test.ts --bundle --outdir=dist-test --out-extension:.js=.cjs --external:web-tree-sitter --external:tree-sitter-wasms --format=cjs --platform=node",
+    "build-test": "esbuild test/analyzer.test.ts test/highlight.test.ts test/webviewHtml.test.ts test/includeResolution.test.ts test/includePaths.test.ts --bundle --outdir=dist-test --out-extension:.js=.cjs --external:web-tree-sitter --external:tree-sitter-wasms --format=cjs --platform=node",
     "typecheck": "tsc --noEmit",
     "test": "npm run typecheck && npm run build-test && node --test \"dist-test/**/*.cjs\""
   },
