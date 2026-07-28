@@ -79,16 +79,17 @@ function renderVariableList(vars: VariableInfo[]): string {
         // エディタ上に実体を持たない項目（戻り値など）はハイライト対象外とする
         const highlightable = v.highlightable !== false;
         const name = escapeHtml(v.name);
+        const type = escapeHtml(v.type);
         return `
-                <div class="variable-item" data-name="${name}" data-highlightable="${highlightable}"${renderDefinitionAttrs(v.definition)}>
+                <div class="variable-item" data-name="${name}" data-type="${type}" data-highlightable="${highlightable}"${renderDefinitionAttrs(v.definition)}>
                     <div class="variable-row">
                         <div class="variable-info">
-                            <span class="variable-type">${escapeHtml(v.type)}</span>
+                            <span class="variable-type">${type}</span>
                             <span class="variable-name">${name}</span>
                         </div>
                         <div class="variable-actions">
                             ${renderDefinitionButton(v.definition)}
-                            <button class="var-copy-button" data-name="${name}">コピー</button>
+                            <button class="var-copy-button">コピー</button>
                         </div>
                     </div>
                 </div>
@@ -110,14 +111,14 @@ function renderCalledFunctions(funcs: FunctionInfo[]): string {
         // 表示上の末尾 "()" を取り除いた名前を、ハイライト・コピーの対象とする
         const cleanName = escapeHtml(f.name.endsWith('()') ? f.name.slice(0, -2) : f.name);
         return `
-                <div class="variable-item" data-name="${cleanName}" data-highlightable="true"${renderDefinitionAttrs(f.definition)}>
+                <div class="variable-item" data-name="${cleanName}" data-type="" data-highlightable="true"${renderDefinitionAttrs(f.definition)}>
                     <div class="variable-row">
                         <div class="variable-info">
                             <span class="variable-name">${escapeHtml(f.name)}</span>
                         </div>
                         <div class="variable-actions">
                             ${renderDefinitionButton(f.definition)}
-                            <button class="var-copy-button" data-name="${cleanName}">コピー</button>
+                            <button class="var-copy-button">コピー</button>
                         </div>
                     </div>
                 </div>
@@ -156,13 +157,51 @@ function renderSection(modifier: string, title: string, count: number, body: str
 }
 
 /**
+ * コピー時の出力形式です。
+ *
+ * - `name`: 変数名のみ（1行1件）
+ * - `typeAndName`: 型名とタブ区切りで変数名（表計算ソフトで2列になる）
+ */
+export type CopyFormat = 'name' | 'typeAndName';
+
+/**
+ * コピー形式の切り替えUIを生成します。
+ *
+ * @param copyFormat 現在選択されている形式
+ * @returns 生成したHTML
+ */
+function renderCopyFormatSelector(copyFormat: CopyFormat): string {
+    /**
+     * 選択肢1つ分のボタンを生成します。
+     *
+     * @param format 対応する形式
+     * @param label 表示ラベル
+     * @returns 生成したHTML
+     */
+    const option = (format: CopyFormat, label: string) =>
+        `<button class="copy-format-option${copyFormat === format ? ' is-active' : ''}" data-format="${format}">${label}</button>`;
+
+    return `
+        <div class="copy-format" role="group" aria-label="コピー形式">
+            <span class="copy-format-label">コピー形式</span>
+            ${option('name', '変数名')}
+            ${option('typeAndName', '型名 + 変数名')}
+        </div>`;
+}
+
+/**
  * 解析結果から Webview 全体のHTMLを生成します。
  *
  * @param result 解析結果
  * @param nonce Content-Security-Policy で使用する nonce 値
+ * @param copyFormat コピー時の出力形式（省略時は変数名のみ）
  * @returns 生成したHTML
  */
-export function renderAnalysisHtml(result: AnalysisResult, nonce: string): string {
+export function renderAnalysisHtml(
+    result: AnalysisResult,
+    nonce: string,
+    copyFormat: CopyFormat = 'name'
+): string {
     const macroVariables = result.macroVariables ?? [];
     const macroFunctions = result.macroFunctions ?? [];
 
@@ -183,6 +222,7 @@ ${WEBVIEW_STYLES}
         <h1 class="header-title">
             <span>${escapeHtml(result.functionName)}</span>
         </h1>
+${renderCopyFormatSelector(copyFormat)}
     </div>
 
     <div class="layout-grid">
@@ -207,6 +247,41 @@ ${macroFunctions.length > 0 ? renderSection('macro-fn', 'マクロ関数', macro
     <script nonce="${nonce}">
         const vscode = acquireVsCodeApi();
 
+        // 現在選択されているコピー形式（切り替えボタンで変更される）
+        let copyFormat = "${copyFormat}";
+
+        /**
+         * 対象の項目からコピー用の文字列を組み立てます。
+         * 変数と変数は改行で区切り、型名を含める場合はタブで区切ります
+         * （表計算ソフトへ貼り付けると1行1件・2列になります）。
+         */
+        function buildCopyText(items) {
+            return items.map(item => {
+                const name = item.getAttribute('data-name') || '';
+                if (copyFormat !== 'typeAndName') {
+                    return name;
+                }
+                const type = item.getAttribute('data-type') || '';
+                return type + '\\t' + name;
+            }).join('\\n');
+        }
+
+        // コピー形式の切り替え
+        document.querySelectorAll('.copy-format-option').forEach(button => {
+            button.addEventListener('click', () => {
+                const format = button.getAttribute('data-format');
+                if (!format || format === copyFormat) {
+                    return;
+                }
+                copyFormat = format;
+                document.querySelectorAll('.copy-format-option').forEach(other => {
+                    other.classList.toggle('is-active', other.getAttribute('data-format') === format);
+                });
+                // 別の関数を解析して再描画された際も選択を保つため、拡張機能側にも伝える
+                vscode.postMessage({ command: 'setCopyFormat', format: format });
+            });
+        });
+
         // 変数行クリック時にエディタ上の該当箇所をハイライトする
         document.querySelectorAll('.variable-item').forEach(item => {
             item.addEventListener('click', () => {
@@ -228,15 +303,12 @@ ${macroFunctions.length > 0 ? renderSection('macro-fn', 'マクロ関数', macro
                 if (!container) {
                     return;
                 }
-                const names = Array.from(container.querySelectorAll('.variable-item'))
-                    .map(item => item.getAttribute('data-name'))
-                    .filter(name => name);
-                if (names.length === 0) {
+                const items = Array.from(container.querySelectorAll('.variable-item'));
+                if (items.length === 0) {
                     return;
                 }
 
-                // 表計算ソフトへ貼り付けた際に1行1件となるよう改行で区切る
-                vscode.postMessage({ command: 'copyText', text: names.join('\\n') });
+                vscode.postMessage({ command: 'copyText', text: buildCopyText(items) });
 
                 button.textContent = "完了";
                 button.classList.add('copied');
@@ -273,9 +345,9 @@ ${macroFunctions.length > 0 ? renderSection('macro-fn', 'マクロ関数', macro
         document.querySelectorAll('.var-copy-button').forEach(button => {
             button.addEventListener('click', (e) => {
                 e.stopPropagation(); // 親要素（variable-item）のクリックイベント（ハイライト）が走るのを防止
-                const name = button.getAttribute('data-name');
-                if (name) {
-                    vscode.postMessage({ command: 'copyText', text: name });
+                const item = button.closest('.variable-item');
+                if (item) {
+                    vscode.postMessage({ command: 'copyText', text: buildCopyText([item]) });
 
                     button.textContent = "完了";
                     button.classList.add('copied');

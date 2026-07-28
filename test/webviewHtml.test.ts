@@ -31,6 +31,52 @@ function makeResult(overrides: Partial<AnalysisResult> = {}): AnalysisResult {
     };
 }
 
+/** buildCopyText へ渡す `.variable-item` 相当のダミー要素 */
+interface FakeItem {
+    getAttribute(name: string): string | null;
+}
+
+/**
+ * データ属性のみを持つダミーの項目要素を作ります。
+ *
+ * @param type data-type の値
+ * @param name data-name の値
+ * @returns ダミー要素
+ */
+function fakeItem(type: string, name: string): FakeItem {
+    return {
+        getAttribute: (attr: string) => {
+            if (attr === 'data-type') { return type; }
+            if (attr === 'data-name') { return name; }
+            return null;
+        }
+    };
+}
+
+/**
+ * 生成されたHTML内の buildCopyText 関数を取り出し、呼び出せる形にします。
+ *
+ * Webview 内スクリプトはブラウザ上で動くため直接は実行できませんが、
+ * 関数定義を切り出して評価することで連結ロジックのみを検証できます。
+ *
+ * @param html renderAnalysisHtml の出力
+ * @param copyFormat 評価時に用いるコピー形式
+ * @returns 項目リストから連結文字列を作る関数
+ */
+function extractBuildCopyText(
+    html: string,
+    copyFormat: string
+): (items: FakeItem[]) => string {
+    const start = html.indexOf('function buildCopyText(items) {');
+    assert.ok(start >= 0, 'buildCopyText の定義が出力されること');
+    // 関数本体の終端（インデント8桁の閉じ括弧）まで切り出す
+    const end = html.indexOf('\n        }', start);
+    assert.ok(end > start, 'buildCopyText の終端が見つかること');
+    const source = html.substring(start, end + '\n        }'.length);
+
+    return new Function('copyFormat', `${source}; return buildCopyText;`)(copyFormat);
+}
+
 describe('escapeHtml', () => {
     test('HTMLの特殊文字をエスケープする', () => {
         assert.equal(escapeHtml('<script>'), '&lt;script&gt;');
@@ -101,7 +147,10 @@ describe('renderAnalysisHtml: データ属性', () => {
         const html = renderAnalysisHtml(makeResult({
             inputs: [{ name: 'value', type: 'int', details: '' }]
         }), 'N');
-        assert.ok(html.includes('data-name="value" data-highlightable="true"'), 'ハイライト対象として出力されること');
+        assert.ok(
+            html.includes('data-name="value" data-type="int" data-highlightable="true"'),
+            'ハイライト対象として出力されること'
+        );
     });
 
     test('highlightable が false の項目は data-highlightable="false" となる', () => {
@@ -109,9 +158,22 @@ describe('renderAnalysisHtml: データ属性', () => {
             outputs: [{ name: '戻り値 (return)', type: 'int', details: '', highlightable: false }]
         }), 'N');
         assert.ok(
-            html.includes('data-name="戻り値 (return)" data-highlightable="false"'),
+            html.includes('data-name="戻り値 (return)" data-type="int" data-highlightable="false"'),
             'ハイライト対象外として出力されること'
         );
+    });
+
+    test('項目に data-type 属性を出力する', () => {
+        const html = renderAnalysisHtml(makeResult({
+            inputs: [{ name: 'ratio', type: 'float', details: '' }]
+        }), 'N');
+        assert.ok(html.includes('data-type="float"'), '型名がデータ属性として出力されること');
+    });
+
+    test('呼び出し関数の data-type は空文字列となる', () => {
+        // 呼び出し関数には型がないため、型名列は空になる
+        const html = renderAnalysisHtml(makeResult({ calledFunctions: [{ name: 'helper' }] }), 'N');
+        assert.ok(html.includes('data-name="helper" data-type=""'), '空の型名が出力されること');
     });
 
     test('呼び出し関数の data-name から末尾の () を取り除く', () => {
@@ -120,11 +182,12 @@ describe('renderAnalysisHtml: データ属性', () => {
         assert.ok(html.includes('>log_message()<'), '表示名は () 付きのままであること');
     });
 
-    test('コピーボタンにも data-name を出力する', () => {
+    test('個別コピーボタンは項目のデータ属性を参照する', () => {
+        // コピー対象は親の .variable-item から取得するため、ボタン自身に属性は持たせない
         const html = renderAnalysisHtml(makeResult({
             inputs: [{ name: 'value', type: 'int', details: '' }]
         }), 'N');
-        assert.ok(html.includes('<button class="var-copy-button" data-name="value">'), 'コピーボタンに data-name が付くこと');
+        assert.ok(html.includes('<button class="var-copy-button">コピー</button>'), 'ボタンは属性を持たないこと');
     });
 });
 
@@ -233,17 +296,63 @@ describe('renderAnalysisHtml: 分類ごとの一括コピー', () => {
     });
 
     test('一括コピーは改行区切りで連結する', () => {
-        // Webview 内スクリプトが生成する連結処理を取り出して評価する
-        const html = renderAnalysisHtml(makeResult({
+        const build = extractBuildCopyText(renderAnalysisHtml(makeResult({
             inputs: [{ name: 'a', type: 'int', details: '' }]
-        }), 'N');
-        const start = html.indexOf('names.join');
-        assert.ok(start >= 0, '連結処理が出力されること');
-        const snippet = html.substring(start, html.indexOf(')', start) + 1);
+        }), 'N'), 'name');
 
-        // 生成された式をそのまま関数化して評価する（区切り文字が改行であることを確認する）
-        const joinNames = new Function('names', `return ${snippet};`) as (names: string[]) => string;
-        assert.equal(joinNames(['alpha', 'beta', 'gamma']), 'alpha\nbeta\ngamma', '改行で区切られること');
+        const items = [fakeItem('int', 'alpha'), fakeItem('char*', 'beta'), fakeItem('U8', 'gamma')];
+        assert.equal(build(items), 'alpha\nbeta\ngamma', '改行で区切られること');
+    });
+});
+
+describe('renderAnalysisHtml: コピー形式の切り替え', () => {
+    test('コピー形式の切り替えUIを出力する', () => {
+        const html = renderAnalysisHtml(makeResult(), 'N');
+        assert.ok(html.includes('class="copy-format"'), '切り替えUIが出力されること');
+        assert.ok(html.includes('data-format="name"'), '「変数名」の選択肢があること');
+        assert.ok(html.includes('data-format="typeAndName"'), '「型名 + 変数名」の選択肢があること');
+    });
+
+    test('既定では「変数名」が選択状態となる', () => {
+        const html = renderAnalysisHtml(makeResult(), 'N');
+        assert.ok(
+            html.includes('class="copy-format-option is-active" data-format="name"'),
+            '「変数名」が選択状態であること'
+        );
+        assert.ok(
+            html.includes('class="copy-format-option" data-format="typeAndName"'),
+            '「型名 + 変数名」は非選択であること'
+        );
+    });
+
+    test('指定した形式が選択状態として描画される', () => {
+        const html = renderAnalysisHtml(makeResult(), 'N', 'typeAndName');
+        assert.ok(
+            html.includes('class="copy-format-option is-active" data-format="typeAndName"'),
+            '「型名 + 変数名」が選択状態であること'
+        );
+        assert.ok(
+            html.includes('class="copy-format-option" data-format="name"'),
+            '「変数名」は非選択であること'
+        );
+    });
+
+    test('形式が「変数名」のときは名前のみを連結する', () => {
+        const build = extractBuildCopyText(renderAnalysisHtml(makeResult(), 'N', 'name'), 'name');
+        const items = [fakeItem('int', 'sensor_id'), fakeItem('char*', 'name')];
+        assert.equal(build(items), 'sensor_id\nname');
+    });
+
+    test('形式が「型名 + 変数名」のときはタブ区切りで連結する', () => {
+        const build = extractBuildCopyText(renderAnalysisHtml(makeResult(), 'N', 'typeAndName'), 'typeAndName');
+        const items = [fakeItem('int', 'sensor_id'), fakeItem('char*', 'name')];
+        assert.equal(build(items), 'int\tsensor_id\nchar*\tname', '型名とタブで区切られること');
+    });
+
+    test('型名がない項目（呼び出し関数）はタブのみが前置される', () => {
+        // 表計算ソフトで列がずれないよう、型名が空でもタブは維持する
+        const build = extractBuildCopyText(renderAnalysisHtml(makeResult(), 'N', 'typeAndName'), 'typeAndName');
+        assert.equal(build([fakeItem('', 'log_message')]), '\tlog_message');
     });
 });
 

@@ -68,6 +68,45 @@ export const WEBVIEW_STYLES = `
             border: 1px solid rgba(255, 255, 255, 0.05);
         }
 
+        /* コピー形式の切り替え（ヘッダ内） */
+        .copy-format {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 12px;
+        }
+
+        .copy-format-label {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            margin-right: 2px;
+            white-space: nowrap;
+        }
+
+        .copy-format-option {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            color: var(--text-muted);
+            padding: 3px 10px;
+            font-size: 0.7rem;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            white-space: nowrap;
+        }
+
+        .copy-format-option:hover {
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--vscode-editor-foreground, #ffffff);
+        }
+
+        /* 選択中の形式はテーマカラーで強調する */
+        .copy-format-option.is-active {
+            background: var(--vscode-button-background, #007acc);
+            color: var(--vscode-button-foreground, #ffffff);
+            border-color: transparent;
+        }
+
         /* グリッドレイアウト */
         .layout-grid {
             display: flex;
