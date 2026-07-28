@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { AnalysisResult } from './analyzer';
 import { buildHighlightRegex } from './highlight';
-import { createNonce, renderAnalysisHtml } from './webviewHtml';
+import { CopyFormat, createNonce, renderAnalysisHtml } from './webviewHtml';
 
 export class FunctionAnalyzerWebview {
     public static currentPanel: FunctionAnalyzerWebview | undefined;
@@ -9,6 +9,8 @@ export class FunctionAnalyzerWebview {
     private _disposables: vscode.Disposable[] = [];
     private _highlightDecorationType: vscode.TextEditorDecorationType | undefined;
     private _result: AnalysisResult;
+    /** コピー時の出力形式（パネルを開いている間、別の関数を解析しても保持されます） */
+    private _copyFormat: CopyFormat = 'name';
 
     /**
      * Webview を表示するか、既存のパネルを更新します。
@@ -59,6 +61,12 @@ export class FunctionAnalyzerWebview {
                     case 'revealDefinition':
                         this._revealDefinition(message.line, message.column, message.filePath);
                         break;
+                    case 'setCopyFormat':
+                        // 再描画時にも選択を保つため、拡張機能側で保持する
+                        if (message.format === 'name' || message.format === 'typeAndName') {
+                            this._copyFormat = message.format;
+                        }
+                        break;
                 }
             },
             undefined,
@@ -88,7 +96,7 @@ export class FunctionAnalyzerWebview {
         this._result = result;
         this._panel.title = `Analysis: ${result.functionName}`;
         // Content-Security-Policy 用の nonce は描画のたびに新しく生成する
-        this._panel.webview.html = renderAnalysisHtml(result, createNonce());
+        this._panel.webview.html = renderAnalysisHtml(result, createNonce(), this._copyFormat);
     }
 
     /**
