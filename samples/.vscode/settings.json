@@ -1,0 +1,4 @@
+{
+  "//": "samples フォルダをワークスペースとして開いた場合の設定です。include/ を探索対象に加えます。",
+  "c-function-analyzer.includePaths": ["include"]
+}
