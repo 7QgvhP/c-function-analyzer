@@ -37,18 +37,22 @@ export class FileIncludeResolver implements IncludeResolver {
      * @returns 解決できた場合はASTとURI文字列、できなければ null
      */
     public resolve(includePath: string, fromFilePath?: string): ResolvedInclude | null {
-        const resolvedFsPath = this.findFile(includePath, fromFilePath);
-        if (!resolvedFsPath) {
+        const found = this.findFile(includePath, fromFilePath);
+        if (!found) {
             return null;
         }
 
-        const tree = this.parseFile(resolvedFsPath);
+        const tree = this.parseFile(found.fsPath);
         if (!tree) {
             return null;
         }
 
         // 定義位置のジャンプで使うため、解析結果には URI 文字列を渡す
-        return { tree, filePath: vscode.Uri.file(resolvedFsPath).toString() };
+        return {
+            tree,
+            filePath: vscode.Uri.file(found.fsPath).toString(),
+            ambiguous: found.ambiguous
+        };
     }
 
     /**
@@ -63,13 +67,17 @@ export class FileIncludeResolver implements IncludeResolver {
      * インクルードパスに対応する実ファイルを探します。
      *
      * 探索順は「インクルード元ファイルのディレクトリ」→「設定 includePaths」
-     * →「各ワークスペースフォルダの直下」です。
+     * →「各ワークスペースフォルダの直下」です。最初に見つかったものを採用しますが、
+     * 同名のファイルが他の候補にも存在する場合は ambiguous として報告します。
      *
      * @param includePath `#include "..."` に記述されたパス
      * @param fromFilePath インクルード元ファイルのURI文字列
-     * @returns 見つかったファイルの絶対パス（fsPath）、見つからなければ null
+     * @returns 見つかったファイルの絶対パスと曖昧さ、見つからなければ null
      */
-    private findFile(includePath: string, fromFilePath?: string): string | null {
+    private findFile(
+        includePath: string,
+        fromFilePath?: string
+    ): { fsPath: string; ambiguous: boolean } | null {
         let fromFsPath: string | null = null;
         if (fromFilePath) {
             try {
@@ -82,27 +90,35 @@ export class FileIncludeResolver implements IncludeResolver {
         const folders = (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
 
         // 設定は変更が即座に反映されるよう、解決のたびに読み取る
-        const configuredPaths = vscode.workspace
-            .getConfiguration('c-function-analyzer')
-            .get<string[]>('includePaths', []);
+        const config = vscode.workspace.getConfiguration('c-function-analyzer');
+        const configuredPaths = config.get<string[]>('includePaths', []);
+        const excludedPaths = config.get<string[]>('excludePaths', []);
 
         const candidates = buildIncludeCandidates(
             includePath,
             fromFsPath,
             folders,
-            Array.isArray(configuredPaths) ? configuredPaths : []
+            Array.isArray(configuredPaths) ? configuredPaths : [],
+            Array.isArray(excludedPaths) ? excludedPaths : []
         );
 
+        // 意図しないファイルを参照していないか利用者が気づけるよう、
+        // 候補のうち実在するものをすべて数える
+        const existing: string[] = [];
         for (const candidate of candidates) {
             try {
                 if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
-                    return candidate;
+                    existing.push(candidate);
                 }
             } catch {
                 // アクセス権限などで失敗した候補は読み飛ばす
             }
         }
-        return null;
+
+        if (existing.length === 0) {
+            return null;
+        }
+        return { fsPath: existing[0], ambiguous: existing.length > 1 };
     }
 
     /**

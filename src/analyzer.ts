@@ -14,6 +14,22 @@ export interface DefinitionLocation {
     line: number;
     /** 列番号（0始まり） */
     column: number;
+    /**
+     * 同名のファイルが複数見つかった状態で解決された定義かどうか。
+     * true の場合、意図と異なるファイルを参照している可能性があります。
+     */
+    ambiguous?: boolean;
+}
+
+/**
+ * シンボルの収集元ファイルの情報です。
+ * 解析対象ファイル自身から収集する場合は省略します。
+ */
+interface SymbolOrigin {
+    /** 収集元ファイルのパス */
+    filePath: string;
+    /** 同名ファイルが複数見つかった状態で解決されたか */
+    ambiguous?: boolean;
 }
 
 export interface VariableInfo {
@@ -35,6 +51,11 @@ export interface ResolvedInclude {
     tree: Parser.Tree;
     /** 実際に読み込んだファイルのパス（定義位置の filePath として使用されます） */
     filePath: string;
+    /**
+     * 同名のファイルが探索対象に複数存在したかどうか。
+     * true の場合、このファイル由来の定義には「候補が複数ある」印が付きます。
+     */
+    ambiguous?: boolean;
 }
 
 /**
@@ -194,16 +215,19 @@ interface DeclaratorInfo {
  * ASTノードの開始位置を定義位置として取り出します。
  *
  * @param node 対象ノード
- * @param filePath インクルードファイル内の場合はそのパス（解析対象ファイル自身なら省略）
+ * @param origin 収集元ファイルの情報（解析対象ファイル自身の場合は省略）
  * @returns 定義位置
  */
-function toDefinitionLocation(node: Parser.SyntaxNode, filePath?: string): DefinitionLocation {
+function toDefinitionLocation(node: Parser.SyntaxNode, origin?: SymbolOrigin): DefinitionLocation {
     const location: DefinitionLocation = {
         line: node.startPosition.row,
         column: node.startPosition.column
     };
-    if (filePath) {
-        location.filePath = filePath;
+    if (origin) {
+        location.filePath = origin.filePath;
+        if (origin.ambiguous) {
+            location.ambiguous = true;
+        }
     }
     return location;
 }
@@ -261,7 +285,7 @@ function forEachFileScopeNode(
  * @param node 宣言子ノード（pointer_declarator, array_declarator, function_declarator など）
  * @returns 識別子名とポインタ・配列の深さ、および引数リストを保持する function_declarator
  */
-function resolveDeclarator(node: Parser.SyntaxNode, filePath?: string): DeclaratorInfo {
+function resolveDeclarator(node: Parser.SyntaxNode, origin?: SymbolOrigin): DeclaratorInfo {
     let name = '';
     let pointerDepth = 0;
     let arrayDepth = 0;
@@ -285,7 +309,7 @@ function resolveDeclarator(node: Parser.SyntaxNode, filePath?: string): Declarat
         } else if (current.type === 'identifier' || current.type === 'field_identifier') {
             // field_identifier は構造体・共用体のメンバ宣言における識別子
             name = current.text;
-            position = toDefinitionLocation(current, filePath);
+            position = toDefinitionLocation(current, origin);
             break;
         }
 
@@ -448,7 +472,7 @@ function cleanTypeText(text: string): string {
 function collectDeclaredVars(
     declNode: Parser.SyntaxNode,
     into: Map<string, DeclaredVar>,
-    filePath?: string
+    origin?: SymbolOrigin
 ): void {
     const typeNode = declNode.childForFieldName('type') || declNode.child(0);
     if (!typeNode) {
@@ -469,7 +493,7 @@ function collectDeclaredVars(
             decl = child.childForFieldName('declarator') || child.child(0)!;
         }
 
-        const info = resolveDeclarator(decl, filePath);
+        const info = resolveDeclarator(decl, origin);
         if (!info.name || !info.position) {
             continue;
         }
@@ -498,17 +522,17 @@ function collectDeclaredVars(
  * フェーズ1: ファイル直下の変数宣言をスキャンし、グローバル変数の型情報と宣言位置を収集します。
  *
  * @param rootNode ASTのルートノード
- * @param filePath インクルードファイルの場合はそのパス
+ * @param origin 収集元ファイルの情報（解析対象ファイル自身の場合は省略）
  * @returns 変数名 → 型名と宣言位置 のマップ
  */
 function collectFileScopeVars(
     rootNode: Parser.SyntaxNode,
-    filePath?: string
+    origin?: SymbolOrigin
 ): Map<string, DeclaredVar> {
     const fileScopeVars = new Map<string, DeclaredVar>();
     forEachFileScopeNode(rootNode, node => {
         if (node.type === 'declaration') {
-            collectDeclaredVars(node, fileScopeVars, filePath);
+            collectDeclaredVars(node, fileScopeVars, origin);
         }
     });
     return fileScopeVars;
@@ -521,12 +545,12 @@ function collectFileScopeVars(
  * グローバル変数と誤分類しないよう、除外用の名前一覧としても使用します。
  *
  * @param rootNode ASTのルートノード
- * @param filePath インクルードファイルの場合はそのパス
+ * @param origin 収集元ファイルの情報（解析対象ファイル自身の場合は省略）
  * @returns 関数名 → 定義位置 のマップ
  */
 function collectFileScopeFunctions(
     rootNode: Parser.SyntaxNode,
-    filePath?: string
+    origin?: SymbolOrigin
 ): Map<string, DefinitionLocation> {
     const functionNames = new Map<string, DefinitionLocation>();
 
@@ -535,7 +559,7 @@ function collectFileScopeFunctions(
         if (node.type === 'function_definition') {
             const declaratorNode = node.childForFieldName('declarator');
             if (declaratorNode) {
-                const info = resolveDeclarator(declaratorNode, filePath);
+                const info = resolveDeclarator(declaratorNode, origin);
                 if (info.name && info.position) {
                     // 定義は宣言より優先するため上書きする
                     functionNames.set(info.name, info.position);
@@ -553,7 +577,7 @@ function collectFileScopeFunctions(
                 if (child.type !== 'function_declarator') {
                     continue;
                 }
-                const info = resolveDeclarator(child, filePath);
+                const info = resolveDeclarator(child, origin);
                 if (info.name && info.position && info.pointerDepth === 0 && !functionNames.has(info.name)) {
                     functionNames.set(info.name, info.position);
                 }
@@ -571,12 +595,12 @@ function collectFileScopeFunctions(
  * オブジェクト形式（`#define MAX 10`）と関数形式（`#define SQ(x) ((x)*(x))`）の双方に対応します。
  *
  * @param rootNode ASTのルートノード
- * @param filePath インクルードファイルの場合はそのパス
+ * @param origin 収集元ファイルの情報（解析対象ファイル自身の場合は省略）
  * @returns マクロ名 → 定義値と定義位置 のマップ
  */
 function collectMacros(
     rootNode: Parser.SyntaxNode,
-    filePath?: string
+    origin?: SymbolOrigin
 ): Map<string, MacroDefinition> {
     const macros = new Map<string, MacroDefinition>();
 
@@ -591,7 +615,7 @@ function collectMacros(
         const valueNode = node.childForFieldName('value');
         macros.set(nameNode.text, {
             value: valueNode ? valueNode.text.replace(/\s+/g, ' ').trim() : '',
-            definition: toDefinitionLocation(nameNode, filePath)
+            definition: toDefinitionLocation(nameNode, origin)
         });
     });
 
@@ -602,16 +626,16 @@ function collectMacros(
  * 構造体・共用体のメンバ一覧を収集します。
  *
  * @param bodyNode field_declaration_list ノード
- * @param filePath インクルードファイルの場合はそのパス
+ * @param origin 収集元ファイルの情報（解析対象ファイル自身の場合は省略）
  * @returns メンバ名 → 型情報 のマップ
  */
-function collectStructMembers(bodyNode: Parser.SyntaxNode, filePath?: string): StructMembers {
+function collectStructMembers(bodyNode: Parser.SyntaxNode, origin?: SymbolOrigin): StructMembers {
     const members: StructMembers = new Map();
     for (let i = 0; i < bodyNode.childCount; i++) {
         const child = bodyNode.child(i)!;
         if (child.type === 'field_declaration') {
             // field_declaration は declaration と同じ構造（type + declarator）のため共通処理を使う
-            collectDeclaredVars(child, members, filePath);
+            collectDeclaredVars(child, members, origin);
         }
     }
     return members;
@@ -646,12 +670,12 @@ function resolveTypedefName(typedefNode: Parser.SyntaxNode): string {
  * どちらの表記からもメンバを引けるようにします。関数ボディ内のローカルな型定義は対象外です。
  *
  * @param rootNode ASTのルートノード
- * @param filePath インクルードファイルの場合はそのパス
+ * @param origin 収集元ファイルの情報（解析対象ファイル自身の場合は省略）
  * @returns 型名 → メンバ一覧 のマップ
  */
 function collectStructDefinitions(
     rootNode: Parser.SyntaxNode,
-    filePath?: string
+    origin?: SymbolOrigin
 ): Map<string, StructMembers> {
     const structs = new Map<string, StructMembers>();
 
@@ -671,7 +695,7 @@ function collectStructDefinitions(
                 return;
             }
 
-            const members = collectStructMembers(bodyNode, filePath);
+            const members = collectStructMembers(bodyNode, origin);
             if (members.size === 0) {
                 return;
             }
@@ -704,18 +728,18 @@ function collectStructDefinitions(
  * フェーズ1: 1つのファイルからファイルスコープのシンボル（変数・関数・マクロ）を収集します。
  *
  * @param rootNode ASTのルートノード
- * @param filePath インクルードファイルの場合はそのパス
+ * @param origin 収集元ファイルの情報（解析対象ファイル自身の場合は省略）
  * @returns 収集したシンボル情報
  */
 function collectFileScopeSymbols(
     rootNode: Parser.SyntaxNode,
-    filePath?: string
+    origin?: SymbolOrigin
 ): FileScopeSymbols {
     return {
-        vars: collectFileScopeVars(rootNode, filePath),
-        functions: collectFileScopeFunctions(rootNode, filePath),
-        macros: collectMacros(rootNode, filePath),
-        structs: collectStructDefinitions(rootNode, filePath)
+        vars: collectFileScopeVars(rootNode, origin),
+        functions: collectFileScopeFunctions(rootNode, origin),
+        macros: collectMacros(rootNode, origin),
+        structs: collectStructDefinitions(rootNode, origin)
     };
 }
 
@@ -810,7 +834,11 @@ function collectIncludedSymbols(
         }
         visited.add(resolved.filePath);
 
-        const included = collectFileScopeSymbols(resolved.tree.rootNode, resolved.filePath);
+        // 同名ファイルが複数あった場合は、このファイル由来の定義に印を付ける
+        const included = collectFileScopeSymbols(resolved.tree.rootNode, {
+            filePath: resolved.filePath,
+            ambiguous: resolved.ambiguous
+        });
         mergeSymbols(into, included);
 
         // さらに深いインクルードを辿る

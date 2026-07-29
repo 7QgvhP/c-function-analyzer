@@ -66,6 +66,37 @@ function renderDefinitionButton(definition?: DefinitionLocation): string {
 }
 
 /**
+ * 同名ファイルが複数見つかった場合の注意マークを生成します。
+ *
+ * @param definition 定義位置（未特定の場合はマークを出力しません）
+ * @returns 生成したHTML
+ */
+function renderAmbiguousMark(definition?: DefinitionLocation): string {
+    if (!definition || !definition.ambiguous) {
+        return '';
+    }
+    return '<span class="ambiguous-mark" title="同名のファイルが複数見つかりました。意図と異なる定義を参照している可能性があります。「定義へ」で実際に参照しているファイルを確認できます。">!</span>';
+}
+
+/**
+ * 解析結果に、同名ファイルが複数あった定義が含まれるか判定します。
+ *
+ * @param result 解析結果
+ * @returns 1件でも該当があれば true
+ */
+function hasAmbiguousDefinition(result: AnalysisResult): boolean {
+    const groups: { definition?: DefinitionLocation }[][] = [
+        result.inputs,
+        result.outputs,
+        result.internalVariables,
+        result.macroVariables ?? [],
+        result.calledFunctions,
+        result.macroFunctions ?? []
+    ];
+    return groups.some(items => items.some(item => item.definition && item.definition.ambiguous));
+}
+
+/**
  * 変数リストの各行のHTMLを生成します。
  *
  * @param vars 変数情報のリスト
@@ -85,7 +116,7 @@ function renderVariableList(vars: VariableInfo[]): string {
                     <div class="variable-row">
                         <div class="variable-info">
                             <span class="variable-type">${type}</span>
-                            <span class="variable-name">${name}</span>
+                            <span class="variable-name">${name}</span>${renderAmbiguousMark(v.definition)}
                         </div>
                         <div class="variable-actions">
                             ${renderDefinitionButton(v.definition)}
@@ -114,7 +145,7 @@ function renderCalledFunctions(funcs: FunctionInfo[]): string {
                 <div class="variable-item" data-name="${cleanName}" data-type="" data-highlightable="true"${renderDefinitionAttrs(f.definition)}>
                     <div class="variable-row">
                         <div class="variable-info">
-                            <span class="variable-name">${escapeHtml(f.name)}</span>
+                            <span class="variable-name">${escapeHtml(f.name)}</span>${renderAmbiguousMark(f.definition)}
                         </div>
                         <div class="variable-actions">
                             ${renderDefinitionButton(f.definition)}
@@ -205,6 +236,16 @@ export function renderAnalysisHtml(
     const macroVariables = result.macroVariables ?? [];
     const macroFunctions = result.macroFunctions ?? [];
 
+    // 同名ファイルが複数あった場合は、見落とさないようヘッダにも注意を出す
+    const ambiguousNotice = hasAmbiguousDefinition(result)
+        ? `
+        <div class="ambiguous-notice">
+            <span class="ambiguous-mark">!</span>
+            同名のファイルが複数見つかった定義があります。意図と異なるファイルを参照している可能性があります。
+            「定義へ」で参照先を確認するか、設定 <code>excludePaths</code> で使用しないディレクトリを除外してください。
+        </div>`
+        : '';
+
     return `<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -224,6 +265,7 @@ ${WEBVIEW_STYLES}
         </h1>
 ${renderCopyFormatSelector(copyFormat)}
     </div>
+${ambiguousNotice}
 
     <div class="layout-grid">
         <!-- 入力変数セクション -->

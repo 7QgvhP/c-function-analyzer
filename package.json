@@ -2,7 +2,7 @@
   "name": "c-function-analyzer",
   "displayName": "C Function Analyzer",
   "description": "C言語の選択された関数を簡易解析し、入出力変数や呼び出し関数を別ウィンドウに表示します。",
-  "version": "2.7.0",
+  "version": "2.8.0",
   "publisher": "antigravity",
   "repository": {
     "type": "git",
@@ -55,7 +55,15 @@
             "type": "string"
           },
           "default": [],
-          "markdownDescription": "`#include \"...\"` を解決する際に追加で探索するディレクトリを指定します。相対パスはワークスペースフォルダからの相対として解決され、絶対パスはそのまま使用されます。\n\n探索順は「インクルード元ファイルのディレクトリ」→「本設定のディレクトリ（記述順）」→「ワークスペースフォルダの直下」です。\n\n例: `[\"include\", \"common/inc\", \"C:/SDK/include\"]`"
+          "markdownDescription": "`#include \"...\"` を解決する際に追加で探索するディレクトリを指定します。相対パスはワークスペースフォルダからの相対として解決され、絶対パスはそのまま使用されます。\n\n探索順は「インクルード元ファイルのディレクトリ」→「本設定のディレクトリ（記述順）」→「ワークスペースフォルダの直下」です。同名のファイルが複数ある場合は、先に見つかったものが採用されます。\n\n例: `[\"include\", \"common/inc\", \"C:/SDK/include\"]`"
+        },
+        "c-function-analyzer.excludePaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "`#include \"...\"` の探索対象から除外するディレクトリを指定します。指定したディレクトリの配下はすべて除外されます。\n\nビルド時に切り替える同名ファイルがある場合、使用しない側のディレクトリを指定すると、意図した定義のみが参照されます。\n\n相対パスはワークスペースフォルダからの相対として解決され、絶対パスはそのまま使用されます。\n\n例: `[\"variantB\", \"legacy/old_hed\"]`"
         }
       }
     }
