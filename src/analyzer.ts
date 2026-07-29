@@ -589,6 +589,59 @@ function collectFileScopeFunctions(
 }
 
 /**
+ * マクロの定義値を表示用に整えます。
+ *
+ * `#define` の値は行末までの生テキストとして取得されるため、末尾に書かれた
+ * 行コメントが値に含まれてしまいます。これを取り除いてから空白を正規化します。
+ *
+ * 文字列リテラル・文字リテラルの内側にある `//`（`"http://..."` など）は
+ * コメントではないため、リテラルの内外を判定しながら走査します。
+ *
+ * @param text 定義値の生テキスト
+ * @returns コメントを除去し空白を正規化した定義値
+ */
+function normalizeMacroValue(text: string): string {
+    let inString = false;
+    let inChar = false;
+    let commentStart = -1;
+
+    for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+
+        if (inString || inChar) {
+            // エスケープされた次の1文字は判定対象から外す
+            if (ch === '\\') {
+                i++;
+                continue;
+            }
+            if (inString && ch === '"') {
+                inString = false;
+            } else if (inChar && ch === '\'') {
+                inChar = false;
+            }
+            continue;
+        }
+
+        if (ch === '"') {
+            inString = true;
+            continue;
+        }
+        if (ch === '\'') {
+            inChar = true;
+            continue;
+        }
+        // 行コメントとブロックコメントの開始位置で打ち切る
+        if (ch === '/' && (text[i + 1] === '/' || text[i + 1] === '*')) {
+            commentStart = i;
+            break;
+        }
+    }
+
+    const withoutComment = commentStart >= 0 ? text.substring(0, commentStart) : text;
+    return withoutComment.replace(/\s+/g, ' ').trim();
+}
+
+/**
  * フェーズ1: マクロ定義（`#define`）を収集します。
  *
  * `#ifdef` ブロック内の定義も拾うため、AST全体を走査します。
@@ -614,7 +667,7 @@ function collectMacros(
         }
         const valueNode = node.childForFieldName('value');
         macros.set(nameNode.text, {
-            value: valueNode ? valueNode.text.replace(/\s+/g, ' ').trim() : '',
+            value: valueNode ? normalizeMacroValue(valueNode.text) : '',
             definition: toDefinitionLocation(nameNode, origin)
         });
     });
@@ -1264,6 +1317,18 @@ function buildResult(
                         definition: declared.definition
                     });
                 } else {
+                    // 変数宣言が見つからない場合、同名のマクロ定義があればその値を表示する。
+                    // 小文字を含むマクロは大文字マクロ分類の対象外となり、ここへ到達する。
+                    const macro = symbols.macros.get(rootName);
+                    if (macro) {
+                        target.push({
+                            name: path,
+                            type: formatMacroType(macro),
+                            details,
+                            definition: macro.definition
+                        });
+                        return;
+                    }
                     target.push({ name: path, type: 'global (推定)', details });
                 }
             }
