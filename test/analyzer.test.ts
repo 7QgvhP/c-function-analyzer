@@ -679,8 +679,8 @@ int check(int v) {
         assert.equal(findVar(r.macroVariables ?? [], 'DELIM')?.type, "macro ('a')");
     });
 
-    test('小文字を含むマクロも定義値を表示する (v2.10.1)', async () => {
-        // 大文字マクロ分類の対象外となるため、従来は global (推定) と表示されていた
+    test('小文字を含むマクロもマクロ変数として分類する (v2.11.0)', async () => {
+        // 名前の大小ではなく、収集した #define の有無で判定する
         const r = await analyzeOrThrow(`
 #define hoge (10) // コメント
 
@@ -688,11 +688,12 @@ int check(int v) {
     return v > hoge;
 }
 `, 'int check(');
-        const m = findVar(r.inputs, 'hoge');
-        assert.ok(m, `入力に hoge が含まれること: ${names(r.inputs)}`);
+        const m = findVar(r.macroVariables ?? [], 'hoge');
+        assert.ok(m, `マクロ変数に hoge が含まれること: ${names(r.macroVariables ?? [])}`);
         assert.equal(m.type, 'macro ((10))');
         assert.ok(m.definition, '定義位置も記録されること');
         assert.equal(m.definition.line, 1);
+        assert.ok(!names(r.inputs).includes('hoge'), '入力変数には含まれないこと');
     });
 
     test('マクロ定義がないグローバル変数は推定表示のままとする (v2.10.1)', async () => {
@@ -713,6 +714,86 @@ int check(int v) {
 }
 `, 'int check(');
         assert.equal(findVar(r.macroVariables ?? [], 'ENABLED')?.type, 'macro');
+    });
+
+    test('大文字でも変数宣言があればマクロ変数に分類しない (v2.11.0)', async () => {
+        // 定義を収集済みなら、名前が大文字でも変数として扱う
+        const r = await analyzeOrThrow(`
+extern int GLOBAL_COUNTER;
+
+void work(int v) {
+    GLOBAL_COUNTER = v;
+}
+`, 'void work(');
+        const g = findVar(r.outputs, 'GLOBAL_COUNTER');
+        assert.ok(g, `出力に GLOBAL_COUNTER が含まれること: ${names(r.outputs)}`);
+        assert.equal(g.type, 'int', 'macro (推定) ではなく宣言された型になること');
+        assert.ok(
+            !names(r.macroVariables ?? []).includes('GLOBAL_COUNTER'),
+            'マクロ変数には含まれないこと'
+        );
+    });
+
+    test('大文字でも関数宣言があればマクロ関数に分類しない (v2.11.0)', async () => {
+        const r = await analyzeOrThrow(`
+void INIT_ALL(void);
+
+void work(void) {
+    INIT_ALL();
+}
+`, 'void work(');
+        assert.ok(
+            names(r.calledFunctions).includes('INIT_ALL'),
+            `呼び出し関数に INIT_ALL が含まれること: ${names(r.calledFunctions)}`
+        );
+        assert.ok(
+            !names(r.macroFunctions ?? []).includes('INIT_ALL'),
+            'マクロ関数には含まれないこと'
+        );
+    });
+
+    test('定義が見つからない大文字識別子は従来どおり推定でマクロとする (v2.11.0)', async () => {
+        const r = await analyzeOrThrow(`
+void work(int v) {
+    use(v + UNKNOWN_LIMIT);
+}
+`, 'void work(');
+        const m = findVar(r.macroVariables ?? [], 'UNKNOWN_LIMIT');
+        assert.ok(m, `マクロ変数に UNKNOWN_LIMIT が含まれること: ${names(r.macroVariables ?? [])}`);
+        assert.equal(m.type, 'macro (推定)');
+    });
+
+    test('マクロ定義は変数宣言より優先する (v2.11.0)', async () => {
+        // プリプロセッサ段階で展開されるため、同名の宣言があってもマクロとして扱う
+        const r = await analyzeOrThrow(`
+extern int DUAL;
+#define DUAL 7
+
+int check(int v) {
+    return v + DUAL;
+}
+`, 'int check(');
+        assert.equal(findVar(r.macroVariables ?? [], 'DUAL')?.type, 'macro (7)');
+        assert.ok(!names(r.inputs).includes('DUAL'), '入力変数には含まれないこと');
+    });
+
+    test('オプション無効時も定義に基づく分類は行う (v2.11.0)', async () => {
+        // 設定は「定義が不明なときの推定方針」のみを制御する
+        const r = await analyzeOrThrow(`
+#define KNOWN_MACRO 1
+
+int check(int v) {
+    return v + KNOWN_MACRO + UNKNOWN_MACRO;
+}
+`, 'int check(', false);
+        assert.ok(
+            names(r.macroVariables ?? []).includes('KNOWN_MACRO'),
+            `定義があるものはマクロ変数となること: ${names(r.macroVariables ?? [])}`
+        );
+        assert.ok(
+            names(r.inputs).includes('UNKNOWN_MACRO'),
+            '定義がないものは推定せず入力変数となること'
+        );
     });
 
     test('オプション無効時は大文字識別子を通常分類する (v1.3.0)', async () => {
