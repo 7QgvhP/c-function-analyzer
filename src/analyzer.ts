@@ -900,6 +900,35 @@ function collectIncludedSymbols(
 }
 
 /**
+ * シンボルをマクロとして分類すべきか判定します。
+ *
+ * 収集した定義が見つかった場合はそれに従います（マクロ定義はプリプロセッサ段階で
+ * 展開されるため、変数・関数の宣言より優先します）。
+ * 定義が見つからない場合のみ、名前が大文字のみかどうかで推定します
+ * （システムヘッダ内の定義など、探索対象外のシンボルが該当します）。
+ *
+ * @param name シンボル名
+ * @param hasMacroDefinition 同名のマクロ定義が見つかったか
+ * @param hasSymbolDeclaration 同名の変数宣言または関数宣言が見つかったか
+ * @param classifyAllUppercaseAsMacros 定義不明時に大文字のみの識別子をマクロとみなすか
+ * @returns マクロとして分類する場合は true
+ */
+function shouldClassifyAsMacro(
+    name: string,
+    hasMacroDefinition: boolean,
+    hasSymbolDeclaration: boolean,
+    classifyAllUppercaseAsMacros: boolean
+): boolean {
+    if (hasMacroDefinition) {
+        return true;
+    }
+    if (hasSymbolDeclaration) {
+        return false;
+    }
+    return classifyAllUppercaseAsMacros && isAllUppercase(name);
+}
+
+/**
  * マクロ定義を型名バッジ用の表示文字列に整形します。
  *
  * @param macro マクロ定義（未解決の場合は undefined）
@@ -1190,17 +1219,19 @@ function buildResult(
     const macroFunctions: FunctionInfo[] = [];
     const normalCalledFunctions: FunctionInfo[] = [];
 
-    // 呼び出し関数の大文字マクロ分類
+    // 呼び出し関数を、マクロ関数と通常の関数に振り分ける
     calledFunctions.forEach(func => {
         const info: FunctionInfo = { name: func };
         // 関数定義・プロトタイプ宣言、またはマクロ定義があれば、その位置をジャンプ先として持たせる
         const macro = symbols.macros.get(func);
-        const definition = symbols.functions.get(func) || (macro ? macro.definition : undefined);
+        const functionDefinition = symbols.functions.get(func);
+        const definition = functionDefinition || (macro ? macro.definition : undefined);
         if (definition) {
             info.definition = definition;
         }
 
-        if (classifyAllUppercaseAsMacros && isAllUppercase(func)) {
+        // 定義が見つかればそれに従い、見つからなければ大文字かどうかで推定する
+        if (shouldClassifyAsMacro(func, macro !== undefined, functionDefinition !== undefined, classifyAllUppercaseAsMacros)) {
             macroFunctions.push(info);
         } else {
             normalCalledFunctions.push(info);
@@ -1293,8 +1324,11 @@ function buildResult(
     ) => {
         paths.forEach(path => {
             const rootName = getRootName(path);
-            if (classifyAllUppercaseAsMacros && isAllUppercase(rootName)) {
-                const macro = symbols.macros.get(rootName);
+            const macro = symbols.macros.get(rootName);
+            const declared = symbols.vars.get(rootName);
+
+            // 定義が見つかればそれに従い、見つからなければ大文字かどうかで推定する
+            if (shouldClassifyAsMacro(rootName, macro !== undefined, declared !== undefined, classifyAllUppercaseAsMacros)) {
                 const entry: VariableInfo = {
                     name: path,
                     type: formatMacroType(macro),
@@ -1305,7 +1339,6 @@ function buildResult(
                 }
                 macroVariables.push(entry);
             } else {
-                const declared = symbols.vars.get(rootName);
                 if (declared) {
                     // 構造体メンバのアクセスを辿って型を解決し、
                     // 配列の次元は名前と型のどちらか一方にのみ表示する
@@ -1317,18 +1350,6 @@ function buildResult(
                         definition: declared.definition
                     });
                 } else {
-                    // 変数宣言が見つからない場合、同名のマクロ定義があればその値を表示する。
-                    // 小文字を含むマクロは大文字マクロ分類の対象外となり、ここへ到達する。
-                    const macro = symbols.macros.get(rootName);
-                    if (macro) {
-                        target.push({
-                            name: path,
-                            type: formatMacroType(macro),
-                            details,
-                            definition: macro.definition
-                        });
-                        return;
-                    }
                     target.push({ name: path, type: 'global (推定)', details });
                 }
             }

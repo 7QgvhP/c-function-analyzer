@@ -431,10 +431,34 @@ flowchart LR
     end
 ```
 
-### 5.1 マクロ分類 (`classifyAllUppercaseAsMacros`)
-VS Code の設定 `c-function-analyzer.classifyAllUppercaseAsMacros` が有効な場合、以下のルールで分離します。
-- **呼び出し関数**: 英大文字・数字・アンダースコアのみで構成される場合（例: `LOG_ERROR()`）、`macroFunctions` に分離。
-- **グローバル変数**: 大文字のみの場合（例: `MAX_BUFFER_SIZE`）、`macroVariables` に分離（型名は `macro (推定)`）。
+### 5.1 マクロ分類 (`shouldClassifyAsMacro`)
+
+マクロかどうかは、フェーズ1で収集した定義に基づいて判定します。判定の優先順位は次の通りです。
+
+```mermaid
+flowchart TD
+    A["シンボル名"] --> B{"#define が見つかったか？"}
+    B -->|Yes| M["マクロとして分類（確定）"]
+    B -->|No| C{"変数・関数の宣言が見つかったか？"}
+    C -->|Yes| V["変数・関数として分類（確定）"]
+    C -->|No| D{"classifyAllUppercaseAsMacros が有効かつ<br/>名前が大文字のみか？"}
+    D -->|Yes| M2["マクロとして分類（推定）"]
+    D -->|No| V2["変数・関数として分類（推定）"]
+```
+
+`#define` を変数・関数の宣言より優先するのは、プリプロセッサが先に展開するためです。
+
+| 記述 | 判定 | 型名の表示 |
+|---|---|---|
+| `#define MAX_LIMIT 100` | マクロ（確定） | `macro (100)` |
+| `#define hoge 10` | マクロ（確定。小文字でも） | `macro (10)` |
+| `extern int GLOBAL_COUNTER;` | 変数（確定。大文字でも） | `int` |
+| `void INIT_ALL(void);` | 関数（確定。大文字でも） | — |
+| 定義が見つからない `UNKNOWN_LIMIT` | マクロ（推定） | `macro (推定)` |
+
+設定 `c-function-analyzer.classifyAllUppercaseAsMacros` は、**定義が特定できなかった場合の推定方針のみ**を制御します。定義に基づく判定は推定ではないため、設定の影響を受けません。
+
+システムインクルード（`#include <...>`）は探索対象外のため、標準ライブラリのマクロは推定による判定になります。
 
 ---
 
