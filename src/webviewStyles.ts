@@ -107,6 +107,48 @@ export const WEBVIEW_STYLES = `
             border-color: transparent;
         }
 
+        /* 同名ファイルが複数あった場合の注意マーク（変数名の右に表示） */
+        .ambiguous-mark {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 15px;
+            height: 15px;
+            margin-left: 6px;
+            border-radius: 50%;
+            background: var(--vscode-editorWarning-foreground, #cca700);
+            color: #1e1e1e;
+            font-size: 0.68rem;
+            font-weight: 700;
+            font-family: var(--font-mono);
+            cursor: help;
+            flex-shrink: 0;
+        }
+
+        /* 同名ファイルの注意（ヘッダ下の帯） */
+        .ambiguous-notice {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+            padding: 10px 14px;
+            font-size: 0.8rem;
+            line-height: 1.5;
+            color: var(--vscode-editor-foreground, #cccccc);
+            background: rgba(204, 167, 0, 0.08);
+            border: 1px solid var(--vscode-editorWarning-foreground, #cca700);
+            border-radius: 6px;
+        }
+
+        .ambiguous-notice code {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            padding: 1px 5px;
+            border-radius: 3px;
+            background: rgba(255, 255, 255, 0.08);
+        }
+
         /* グリッドレイアウト */
         .layout-grid {
             display: flex;

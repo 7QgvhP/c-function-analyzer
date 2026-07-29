@@ -356,6 +356,67 @@ describe('renderAnalysisHtml: コピー形式の切り替え', () => {
     });
 });
 
+describe('renderAnalysisHtml: 同名ファイルの注意表示', () => {
+    test('ambiguous な定義の項目に注意マークを出力する', () => {
+        const html = renderAnalysisHtml(makeResult({
+            inputs: [{
+                name: 'g_mode', type: 'int', details: '',
+                definition: { line: 3, column: 11, filePath: 'file:///variantA/config.h', ambiguous: true }
+            }]
+        }), 'N');
+        assert.ok(html.includes('class="ambiguous-mark"'), '注意マークが出力されること');
+    });
+
+    test('ambiguous でない定義には注意マークを出力しない', () => {
+        const html = renderAnalysisHtml(makeResult({
+            inputs: [{
+                name: 'g_mode', type: 'int', details: '',
+                definition: { line: 3, column: 11, filePath: 'file:///only/config.h' }
+            }]
+        }), 'N');
+        assert.ok(!html.includes('class="ambiguous-mark"'), '注意マークが出力されないこと');
+    });
+
+    test('該当があるときヘッダに注意の帯を出力する', () => {
+        const html = renderAnalysisHtml(makeResult({
+            outputs: [{
+                name: 'g_mode', type: 'int', details: '',
+                definition: { line: 3, column: 11, ambiguous: true }
+            }]
+        }), 'N');
+        assert.ok(html.includes('class="ambiguous-notice"'), '注意の帯が出力されること');
+        assert.ok(html.includes('excludePaths'), '対処方法として設定名が案内されること');
+    });
+
+    test('該当がなければヘッダに注意の帯を出力しない', () => {
+        const html = renderAnalysisHtml(makeResult({
+            inputs: [{ name: 'v', type: 'int', details: '', definition: { line: 1, column: 0 } }]
+        }), 'N');
+        assert.ok(!html.includes('class="ambiguous-notice"'), '注意の帯が出力されないこと');
+    });
+
+    test('呼び出し関数の ambiguous も検出する', () => {
+        const html = renderAnalysisHtml(makeResult({
+            calledFunctions: [{
+                name: 'helper',
+                definition: { line: 5, column: 0, filePath: 'file:///a/util.h', ambiguous: true }
+            }]
+        }), 'N');
+        assert.ok(html.includes('class="ambiguous-mark"'), '注意マークが出力されること');
+        assert.ok(html.includes('class="ambiguous-notice"'), '注意の帯も出力されること');
+    });
+
+    test('マクロ変数の ambiguous も検出する', () => {
+        const html = renderAnalysisHtml(makeResult({
+            macroVariables: [{
+                name: 'MAX_LIMIT', type: 'macro (10)', details: '',
+                definition: { line: 2, column: 8, filePath: 'file:///a/limits.h', ambiguous: true }
+            }]
+        }), 'N');
+        assert.ok(html.includes('class="ambiguous-notice"'), '注意の帯が出力されること');
+    });
+});
+
 describe('renderAnalysisHtml: セクション構成', () => {
     test('各セクションの件数を表示する', () => {
         const html = renderAnalysisHtml(makeResult({

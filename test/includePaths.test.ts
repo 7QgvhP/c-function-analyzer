@@ -118,6 +118,66 @@ describe('buildIncludeCandidates: includePaths 設定', () => {
     });
 });
 
+describe('buildIncludeCandidates: excludePaths 設定', () => {
+    test('除外したディレクトリ配下の候補を取り除く', () => {
+        const candidates = buildIncludeCandidates(
+            'config.h', null, [WORKSPACE], ['variantA', 'variantB'], ['variantB']
+        );
+        assert.ok(candidates.includes(path.join(WORKSPACE, 'variantA', 'config.h')), 'variantA は残ること');
+        assert.ok(
+            !candidates.includes(path.join(WORKSPACE, 'variantB', 'config.h')),
+            'variantB は除外されること'
+        );
+    });
+
+    test('除外はサブディレクトリにも及ぶ', () => {
+        const candidates = buildIncludeCandidates(
+            'config.h', null, [WORKSPACE], ['legacy/old/inc'], ['legacy']
+        );
+        assert.deepEqual(
+            candidates,
+            normalize([path.join(WORKSPACE, 'config.h')]),
+            'legacy 配下はすべて除外されること'
+        );
+    });
+
+    test('インクルード元ディレクトリの候補も除外できる', () => {
+        const fromFile = path.join(WORKSPACE, 'variantB', 'main.c');
+        const candidates = buildIncludeCandidates(
+            'config.h', fromFile, [WORKSPACE], [], ['variantB']
+        );
+        assert.ok(
+            !candidates.includes(path.join(WORKSPACE, 'variantB', 'config.h')),
+            'インクルード元と同じディレクトリでも除外されること'
+        );
+    });
+
+    test('絶対パスでの除外指定に対応する', () => {
+        const sdk = path.resolve('/sdk/old');
+        const candidates = buildIncludeCandidates(
+            'driver.h', null, [WORKSPACE], [sdk], [sdk]
+        );
+        assert.ok(!candidates.includes(path.join(sdk, 'driver.h')), '絶対パスで除外されること');
+    });
+
+    test('除外指定がなければ従来どおり動作する', () => {
+        const withEmpty = buildIncludeCandidates('config.h', FROM_FILE, [WORKSPACE], ['include'], []);
+        const withoutArg = buildIncludeCandidates('config.h', FROM_FILE, [WORKSPACE], ['include']);
+        assert.deepEqual(withEmpty, withoutArg);
+    });
+
+    test('除外ディレクトリと同名の別ディレクトリは除外しない', () => {
+        // "variant" を除外しても "variantA" は対象外にならないこと
+        const candidates = buildIncludeCandidates(
+            'config.h', null, [WORKSPACE], ['variantA'], ['variant']
+        );
+        assert.ok(
+            candidates.includes(path.join(WORKSPACE, 'variantA', 'config.h')),
+            '前方一致ではなくディレクトリ単位で判定されること'
+        );
+    });
+});
+
 describe('buildIncludeCandidates: 重複の除去', () => {
     test('同じ候補が複数回現れても1度だけ並べる', () => {
         // 設定 "." はワークスペース直下と同じ場所を指す
