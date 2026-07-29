@@ -3,220 +3,159 @@
  *
  * VS Code のテーマ変数（--vscode-*）を参照し、ライト/ダークいずれのテーマにも追従します。
  * 拡張機能は単一ファイルにバンドルされるため、外部 CSS ファイルではなく定数として保持します。
+ *
+ * 方針: 情報の構造を示す装飾（カテゴリの色分け・セクションのまとまり）は残し、
+ * 見栄えのための装飾（影・大きい角丸・大文字見出し・スライドアニメーション）は持たない。
+ * 配色は彩度を抑え、エディタ本体より目立たないようにする。
  */
 export const WEBVIEW_STYLES = `
+        /*
+         * 中間案: 構造の見やすさは残しつつ、装飾を落としたスタイル
+         *
+         * 現在から残すもの : カテゴリごとの色分け、セクションのまとまり、型名の枠
+         * 現在から落とすもの: 影、大きい角丸、大文字＋字間、横スライド、彩度の高い6色
+         */
         :root {
-            --border-color: var(--vscode-panel-border, rgba(255, 255, 255, 0.08));
-            --text-muted: var(--vscode-descriptionForeground, #858585);
-            --bg-hover: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.04));
-            --card-bg: var(--vscode-editor-background, #1e1e1e);
-            --font-mono: var(--vscode-editor-font-family, Consolas, Monaco, monospace);
+            --border-color: var(--vscode-panel-border, #3c3c3c);
+            --text-muted: var(--vscode-descriptionForeground, #9d9d9d);
+            --font-mono: var(--vscode-editor-font-family, Consolas, monospace);
+            --surface: rgba(127, 127, 127, 0.06);
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            color: var(--vscode-editor-foreground, #cccccc);
+            font-family: var(--vscode-font-family, "Segoe UI", sans-serif);
+            font-size: 13px;
+            color: var(--vscode-foreground, #cccccc);
             background-color: var(--vscode-editor-background, #1e1e1e);
             margin: 0;
-            padding: 20px;
+            padding: 12px;
             box-sizing: border-box;
-            line-height: 1.6;
-            /* 型名バッジ（140px 固定）・変数名・各ボタンが1行に収まる最小幅。
-               パネルをこれより狭くした場合は折り返さず横スクロールになる。 */
+            line-height: 1.45;
             min-width: 480px;
         }
 
-        /* ヘッダーセクション */
+        /* ヘッダ */
         .header {
-            margin-bottom: 24px;
-            padding: 16px 20px;
-            background: rgba(255, 255, 255, 0.01);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            overflow: hidden;
+            padding: 0 2px 10px;
+            margin-bottom: 12px;
+            border-bottom: 1px solid var(--border-color);
         }
 
         .header-meta {
-            font-size: 0.75rem;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 2px;
-            color: var(--vscode-textLink-foreground, #3794ff);
-            margin-bottom: 6px;
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-bottom: 3px;
         }
 
         .header-title {
-            font-size: 1.5rem;
+            font-size: 16px;
             font-weight: 600;
             margin: 0;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            word-break: break-all;
-            color: var(--vscode-editor-foreground, #ffffff);
-            flex-wrap: wrap;
-        }
-
-        .header-return-type {
-            font-size: 0.95rem;
-            font-weight: 500;
-            color: var(--text-muted);
             font-family: var(--font-mono);
-            background: rgba(255, 255, 255, 0.04);
-            padding: 2px 8px;
-            border-radius: 4px;
-            border: 1px solid rgba(255, 255, 255, 0.05);
+            word-break: break-all;
+            color: var(--vscode-foreground, #cccccc);
         }
 
-        /* コピー形式の切り替え（ヘッダ内） */
+        /* コピー形式 */
         .copy-format {
             display: flex;
             align-items: center;
-            gap: 6px;
-            margin-top: 12px;
+            gap: 5px;
+            margin-top: 10px;
         }
 
         .copy-format-label {
-            font-size: 0.7rem;
+            font-size: 11px;
             color: var(--text-muted);
-            margin-right: 2px;
-            white-space: nowrap;
+            margin-right: 3px;
         }
 
         .copy-format-option {
-            background: rgba(255, 255, 255, 0.03);
-            border: 1px solid rgba(255, 255, 255, 0.05);
+            background: var(--surface);
+            border: 1px solid var(--border-color);
             color: var(--text-muted);
-            padding: 3px 10px;
-            font-size: 0.7rem;
-            border-radius: 4px;
+            padding: 2px 9px;
+            font-family: inherit;
+            font-size: 11px;
+            border-radius: 3px;
             cursor: pointer;
-            transition: all 0.2s ease;
-            white-space: nowrap;
+            transition: background 0.12s ease, color 0.12s ease;
         }
 
         .copy-format-option:hover {
-            background: rgba(255, 255, 255, 0.08);
-            color: var(--vscode-editor-foreground, #ffffff);
+            color: var(--vscode-foreground, #cccccc);
         }
 
-        /* 選択中の形式はテーマカラーで強調する */
         .copy-format-option.is-active {
-            background: var(--vscode-button-background, #007acc);
+            background: var(--vscode-button-background, #0e639c);
             color: var(--vscode-button-foreground, #ffffff);
-            border-color: transparent;
+            border-color: var(--vscode-button-background, #0e639c);
         }
 
-        /* 同名ファイルが複数あった場合の注意マーク（変数名の右に表示） */
-        .ambiguous-mark {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 15px;
-            height: 15px;
-            margin-left: 6px;
-            border-radius: 50%;
-            background: var(--vscode-editorWarning-foreground, #cca700);
-            color: #1e1e1e;
-            font-size: 0.68rem;
-            font-weight: 700;
-            font-family: var(--font-mono);
-            cursor: help;
-            flex-shrink: 0;
-        }
-
-        /* 同名ファイルの注意（ヘッダ下の帯） */
+        /* 注意表示 */
         .ambiguous-notice {
             display: flex;
-            align-items: center;
-            gap: 4px;
+            align-items: baseline;
+            gap: 6px;
             flex-wrap: wrap;
-            margin-bottom: 20px;
-            padding: 10px 14px;
-            font-size: 0.8rem;
-            line-height: 1.5;
-            color: var(--vscode-editor-foreground, #cccccc);
-            background: rgba(204, 167, 0, 0.08);
-            border: 1px solid var(--vscode-editorWarning-foreground, #cca700);
-            border-radius: 6px;
+            margin-bottom: 12px;
+            padding: 8px 12px;
+            font-size: 12px;
+            border-radius: 3px;
+            color: var(--vscode-foreground, #cccccc);
+            background: var(--vscode-inputValidation-warningBackground, #352a05);
+            border-left: 3px solid var(--vscode-editorWarning-foreground, #cca700);
         }
 
         .ambiguous-notice code {
             font-family: var(--font-mono);
-            font-size: 0.75rem;
-            padding: 1px 5px;
-            border-radius: 3px;
-            background: rgba(255, 255, 255, 0.08);
+            font-size: 11px;
         }
 
-        /* グリッドレイアウト */
-        .layout-grid {
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-        }
-
-        /* セクション（カード） */
-        .section-container {
-            background-color: rgba(255, 255, 255, 0.01);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            padding: 18px 20px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-            transition: border-color 0.2s ease, box-shadow 0.2s ease;
-            overflow: hidden;
-        }
-        .section-container:hover {
-            border-color: rgba(255, 255, 255, 0.15);
-            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
-        }
-
-        /* アクセント色定義 */
-        .section-container.input { --accent-color: #3794ff; }
-        .section-container.output { --accent-color: #2ecc71; }
-        .section-container.internal { --accent-color: #9b59b6; }
-        .section-container.macro-var { --accent-color: #e67e22; }
-        .section-container.called-fn { --accent-color: #1abc9c; }
-        .section-container.macro-fn { --accent-color: #f1c40f; }
-
-        .section-title {
-            font-size: 0.95rem;
-            font-weight: 600;
-            margin-top: 0;
-            margin-bottom: 16px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 10px;
-            color: var(--vscode-editor-foreground, #ffffff);
-            padding-bottom: 10px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-            position: relative;
-        }
-        .section-title::after {
-            content: '';
-            position: absolute;
-            bottom: -1px;
-            left: 0;
-            width: 100%;
-            height: 2px;
-            background-color: var(--accent-color);
-            border-radius: 1px;
-        }
-
-        .section-count {
-            font-size: 0.75rem;
-            font-weight: 600;
-            background: rgba(255, 255, 255, 0.06);
-            color: var(--accent-color);
-            padding: 2px 8px;
-            border-radius: 10px;
-            border: 1px solid rgba(255, 255, 255, 0.04);
-            font-family: var(--font-mono);
+        .ambiguous-mark {
+            color: var(--vscode-editorWarning-foreground, #cca700);
+            font-weight: 700;
+            margin-left: 6px;
+            cursor: help;
             flex-shrink: 0;
         }
 
-        /* 見出し右側の操作領域（件数バッジと一括コピーボタン） */
+        /* セクション: 影と大きい角丸をやめ、左に細いアクセント線 */
+        .layout-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .section-container {
+            background: var(--surface);
+            border: 1px solid var(--border-color);
+            border-left: 3px solid var(--accent-color);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        /* 彩度を落としたカテゴリ色（テーマに馴染む範囲） */
+        .section-container.input     { --accent-color: #5a9fd4; }
+        .section-container.output    { --accent-color: #7fa96b; }
+        .section-container.internal  { --accent-color: #9b8bc4; }
+        .section-container.macro-var { --accent-color: #c49a6c; }
+        .section-container.called-fn { --accent-color: #5fa8a3; }
+        .section-container.macro-fn  { --accent-color: #bfa85c; }
+
+        .section-title {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin: 0;
+            padding: 6px 10px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--vscode-foreground, #cccccc);
+            border-bottom: 1px solid var(--border-color);
+        }
+
         .section-actions {
             display: flex;
             align-items: center;
@@ -224,186 +163,135 @@ export const WEBVIEW_STYLES = `
             flex-shrink: 0;
         }
 
-        /* 分類ごとの一括コピーボタン（件数バッジの右に常時表示） */
-        .section-copy-button {
-            background: rgba(255, 255, 255, 0.03);
-            border: 1px solid rgba(255, 255, 255, 0.05);
+        /* 件数はピルではなく、控えめな角丸 */
+        .section-count {
+            font-family: var(--font-mono);
+            font-size: 11px;
             color: var(--text-muted);
-            padding: 2px 8px;
-            font-size: 0.7rem;
-            font-weight: 400;
-            border-radius: 4px;
+            padding: 0 5px;
+            border-radius: 3px;
+            background: rgba(127, 127, 127, 0.12);
+        }
+
+        .section-copy-button {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            padding: 1px 5px;
+            font-family: inherit;
+            font-size: 11px;
+            border-radius: 3px;
             cursor: pointer;
-            transition: all 0.2s ease;
-            flex-shrink: 0;
-            white-space: nowrap;
         }
 
         .section-copy-button:hover {
-            background: rgba(255, 255, 255, 0.08);
-            color: var(--vscode-editor-foreground, #ffffff);
-            border-color: rgba(255, 255, 255, 0.15);
+            color: var(--vscode-foreground, #cccccc);
+            background: var(--vscode-toolbar-hoverBackground, rgba(90, 93, 94, 0.31));
         }
 
         .section-copy-button.copied {
-            background: var(--vscode-button-background, #007acc);
-            color: var(--vscode-button-foreground, #ffffff);
-            border-color: transparent;
+            color: var(--vscode-foreground, #cccccc);
+            background: var(--vscode-toolbar-hoverBackground, rgba(90, 93, 94, 0.31));
         }
 
-        /* 変数行リスト */
+        /* 変数行 */
         .variable-list {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
+            padding: 3px 0;
         }
 
         .variable-item {
-            padding: 8px 12px;
-            border-radius: 6px;
-            display: flex;
-            flex-direction: column;
-            transition: background-color 0.2s ease, transform 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
+            padding: 0 10px;
             cursor: pointer;
-            background-color: rgba(255, 255, 255, 0.005);
-            border: 1px solid transparent;
         }
 
         .variable-item:hover {
-            background-color: var(--bg-hover);
-            border-color: rgba(255, 255, 255, 0.02);
-            transform: translateX(4px);
+            background-color: var(--vscode-list-hoverBackground, #2a2d2e);
         }
 
         .variable-row {
             display: flex;
-            justify-content: space-between;
             align-items: center;
-            gap: 6px;
+            gap: 8px;
             min-width: 0;
+            height: 26px;
         }
 
         .variable-info {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 10px;
             min-width: 0;
             flex: 1;
         }
 
-        .variable-name {
-            font-weight: 600;
-            font-family: var(--font-mono);
-            font-size: 0.9rem;
-            color: var(--vscode-editor-foreground, #ffffff);
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            min-width: 0;
-        }
-
+        /* 型名は枠を残しつつ、色はアクセントに寄せて控えめに */
         .variable-type {
-            font-family: var(--font-mono);
-            color: var(--accent-color);
-            font-size: 0.75rem;
-            background: rgba(255, 255, 255, 0.03);
-            padding: 2px 6px;
-            border-radius: 4px;
-            border: 1px solid rgba(255, 255, 255, 0.04);
-            transition: background 0.2s ease;
-            /* 型名によらず幅を固定し、変数名の左端が縦に揃うようにする
-               （伸縮させないため flex-grow: 0 / flex-shrink: 0 / flex-basis: 140px） */
             flex: 0 0 140px;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            color: var(--accent-color);
+            background: rgba(127, 127, 127, 0.1);
+            padding: 1px 6px;
+            border-radius: 3px;
             box-sizing: border-box;
             text-align: center;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
         }
-        .variable-item:hover .variable-type {
-            background: rgba(255, 255, 255, 0.06);
+
+        .variable-name {
+            font-family: var(--font-mono);
+            font-size: 12px;
+            color: var(--vscode-foreground, #cccccc);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            min-width: 0;
         }
 
-        /* 行内の操作ボタン群（「定義へ」「コピー」） */
         .variable-actions {
             display: flex;
             align-items: center;
-            gap: 4px;
+            gap: 2px;
             flex-shrink: 0;
-        }
-
-        .var-copy-button,
-        .var-def-button {
-            background: rgba(255, 255, 255, 0.03);
-            border: 1px solid rgba(255, 255, 255, 0.05);
-            color: var(--text-muted);
-            padding: 2px 8px;
-            font-size: 0.7rem;
-            border-radius: 4px;
-            cursor: pointer;
-            transition: all 0.2s ease;
             opacity: 0;
-            flex-shrink: 0;
-            white-space: nowrap;
         }
 
-        .variable-item:hover .var-copy-button,
-        .variable-item:hover .var-def-button {
+        .variable-item:hover .variable-actions {
             opacity: 1;
         }
 
-        .var-copy-button:hover,
-        .var-def-button:hover {
-            background: rgba(255, 255, 255, 0.08);
-            color: var(--vscode-editor-foreground, #ffffff);
-            border-color: rgba(255, 255, 255, 0.15);
+        .var-def-button,
+        .var-copy-button {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            padding: 1px 6px;
+            font-family: inherit;
+            font-size: 11px;
+            border-radius: 3px;
+            cursor: pointer;
+            white-space: nowrap;
         }
 
-        /* 「定義へ」ボタンはアクセント色で区別する */
-        .var-def-button {
-            color: var(--accent-color);
-        }
-        .var-def-button:hover {
-            border-color: var(--accent-color);
+        .var-def-button:hover,
+        .var-copy-button:hover {
+            color: var(--vscode-foreground, #cccccc);
+            background: var(--vscode-toolbar-hoverBackground, rgba(90, 93, 94, 0.31));
         }
 
         .var-copy-button.copied {
-            background: var(--vscode-button-background, #007acc);
-            color: var(--vscode-button-foreground, #ffffff);
-            border-color: transparent;
-            opacity: 1 !important;
+            opacity: 1;
+            color: var(--vscode-foreground, #cccccc);
+            background: var(--vscode-toolbar-hoverBackground, rgba(90, 93, 94, 0.31));
         }
 
         .no-data {
+            padding: 0 10px;
+            height: 26px;
+            line-height: 26px;
+            font-size: 12px;
             color: var(--text-muted);
-            font-size: 0.8rem;
-            padding: 16px;
-            text-align: center;
-            background: rgba(255, 255, 255, 0.005);
-            border: 1px dashed var(--border-color);
-            border-radius: 6px;
-        }
-
-        /* レスポンシブ対応: 狭い幅でのレイアウト調整 */
-        @media (max-width: 400px) {
-            body {
-                padding: 12px;
-            }
-            .header {
-                padding: 12px 14px;
-            }
-            .header-title {
-                font-size: 1.15rem;
-                gap: 8px;
-            }
-            .section-container {
-                padding: 14px 14px;
-            }
-            /* 型名と変数名は狭い幅でも1行に保つ（折り返すと視線が縦に散り、
-               型名バッジの固定幅による変数名の左端揃えも崩れるため）。
-               収まらない場合は変数名を省略表示し、それでも足りなければ横スクロールとする。 */
-            .variable-item {
-                padding: 8px 8px;
-            }
         }
 `;
