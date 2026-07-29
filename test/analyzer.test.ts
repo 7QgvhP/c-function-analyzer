@@ -618,6 +618,103 @@ void work(void) {
         assert.ok(!names(r.inputs).includes('MAX_LIMIT'), '入力変数には含まれないこと');
     });
 
+    test('マクロ値の末尾の行コメントを型名に含めない (v2.10.1)', async () => {
+        // #define の値は行末までの生テキストとして取得されるため、
+        // 行コメントを取り除かないと型名バッジに混入する
+        const r = await analyzeOrThrow(`
+#define HOGE (10) // ここはコメント
+
+int check(int v) {
+    return v > HOGE;
+}
+`, 'int check(');
+        assert.equal(findVar(r.macroVariables ?? [], 'HOGE')?.type, 'macro ((10))');
+    });
+
+    test('マクロ値の末尾のブロックコメントを型名に含めない (v2.10.1)', async () => {
+        const r = await analyzeOrThrow(`
+#define LIMIT 100 /* 最大値 */
+
+int check(int v) {
+    return v > LIMIT;
+}
+`, 'int check(');
+        assert.equal(findVar(r.macroVariables ?? [], 'LIMIT')?.type, 'macro (100)');
+    });
+
+    test('文字列リテラル内の // をコメントとして扱わない (v2.10.1)', async () => {
+        const r = await analyzeOrThrow(`
+#define URL "http://example.com"
+
+int check(int v) {
+    return use(URL) + v;
+}
+`, 'int check(');
+        assert.equal(
+            findVar(r.macroVariables ?? [], 'URL')?.type,
+            'macro ("http://example.com")',
+            '文字列内の // は残ること'
+        );
+    });
+
+    test('除算の / をコメントとして扱わない (v2.10.1)', async () => {
+        const r = await analyzeOrThrow(`
+#define HALF (100/2)
+
+int check(int v) {
+    return v > HALF;
+}
+`, 'int check(');
+        assert.equal(findVar(r.macroVariables ?? [], 'HALF')?.type, 'macro ((100/2))');
+    });
+
+    test('文字リテラルの後ろの行コメントを除去する (v2.10.1)', async () => {
+        const r = await analyzeOrThrow(`
+#define DELIM 'a' // 区切り文字
+
+int check(int v) {
+    return v + DELIM;
+}
+`, 'int check(');
+        assert.equal(findVar(r.macroVariables ?? [], 'DELIM')?.type, "macro ('a')");
+    });
+
+    test('小文字を含むマクロも定義値を表示する (v2.10.1)', async () => {
+        // 大文字マクロ分類の対象外となるため、従来は global (推定) と表示されていた
+        const r = await analyzeOrThrow(`
+#define hoge (10) // コメント
+
+int check(int v) {
+    return v > hoge;
+}
+`, 'int check(');
+        const m = findVar(r.inputs, 'hoge');
+        assert.ok(m, `入力に hoge が含まれること: ${names(r.inputs)}`);
+        assert.equal(m.type, 'macro ((10))');
+        assert.ok(m.definition, '定義位置も記録されること');
+        assert.equal(m.definition.line, 1);
+    });
+
+    test('マクロ定義がないグローバル変数は推定表示のままとする (v2.10.1)', async () => {
+        const r = await analyzeOrThrow(`
+int check(int v) {
+    return v > unknown_global;
+}
+`, 'int check(');
+        assert.equal(findVar(r.inputs, 'unknown_global')?.type, 'global (推定)');
+    });
+
+    test('コメントのみの値はマクロ（値なし）として扱う (v2.10.1)', async () => {
+        const r = await analyzeOrThrow(`
+#define ENABLED // 有効化フラグ
+
+int check(int v) {
+    return v + ENABLED;
+}
+`, 'int check(');
+        assert.equal(findVar(r.macroVariables ?? [], 'ENABLED')?.type, 'macro');
+    });
+
     test('オプション無効時は大文字識別子を通常分類する (v1.3.0)', async () => {
         const r = await analyzeOrThrow(`
 void work(void) {
