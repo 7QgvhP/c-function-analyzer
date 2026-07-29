@@ -5,6 +5,7 @@
  * 解析ロジック（analyzer.ts）からは分離してこちらに配置しています。
  */
 import * as fs from 'fs';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import Parser = require('web-tree-sitter');
 import { IncludeResolver, ResolvedInclude } from './analyzer';
@@ -23,6 +24,9 @@ const MAX_CACHE_ENTRIES = 64;
 export class FileIncludeResolver implements IncludeResolver {
     /** ファイルパス（fsPath）→ パース結果 のキャッシュ */
     private readonly cache = new Map<string, CacheEntry>();
+
+    /** ディレクトリパス → 直下のサブディレクトリ一覧 のキャッシュ（更新時刻で検証） */
+    private readonly dirCache = new Map<string, { mtimeMs: number; subdirectories: string[] }>();
 
     /**
      * @param parser C言語が設定済みの Parser インスタンス
@@ -61,6 +65,49 @@ export class FileIncludeResolver implements IncludeResolver {
     public dispose(): void {
         this.cache.forEach(entry => this.deleteTree(entry.tree));
         this.cache.clear();
+        this.dirCache.clear();
+    }
+
+    /**
+     * ディレクトリ直下のサブディレクトリを列挙します。
+     *
+     * 再帰指定（`hed/**`）の展開で繰り返し呼ばれるため、更新時刻が一致する間は
+     * キャッシュを再利用します。ディレクトリの追加・削除は更新時刻に反映されるため、
+     * 構成が変わった場合は自動的に再取得されます。
+     *
+     * @param directory 対象ディレクトリの絶対パス
+     * @returns サブディレクトリの絶対パス一覧
+     */
+    private listSubdirectories(directory: string): string[] {
+        let mtimeMs: number;
+        try {
+            const stat = fs.statSync(directory);
+            if (!stat.isDirectory()) {
+                return [];
+            }
+            mtimeMs = stat.mtimeMs;
+        } catch {
+            // 存在しない、またはアクセスできないディレクトリは空として扱う
+            return [];
+        }
+
+        const cached = this.dirCache.get(directory);
+        if (cached && cached.mtimeMs === mtimeMs) {
+            return cached.subdirectories;
+        }
+
+        let subdirectories: string[] = [];
+        try {
+            subdirectories = fs
+                .readdirSync(directory, { withFileTypes: true })
+                .filter(entry => entry.isDirectory())
+                .map(entry => path.join(directory, entry.name));
+        } catch {
+            subdirectories = [];
+        }
+
+        this.dirCache.set(directory, { mtimeMs, subdirectories });
+        return subdirectories;
     }
 
     /**
@@ -99,7 +146,8 @@ export class FileIncludeResolver implements IncludeResolver {
             fromFsPath,
             folders,
             Array.isArray(configuredPaths) ? configuredPaths : [],
-            Array.isArray(excludedPaths) ? excludedPaths : []
+            Array.isArray(excludedPaths) ? excludedPaths : [],
+            directory => this.listSubdirectories(directory)
         );
 
         // 意図しないファイルを参照していないか利用者が気づけるよう、
