@@ -65,14 +65,14 @@ sensor_main.c
 
 ### マクロ変数
 
-| 型 | 名前 | 定義元 |
-|---|---|---|
-| `macro (10)` | `SYSTEM_TICK_MS` | **階層3** |
-| `macro (8)` | `MAX_SENSOR_COUNT` | **階層3** |
-| `macro (3)` | `SENSOR_ERROR_LIMIT` | **階層2** |
-| `macro (1000)` | `WARN_THRESHOLD` | **階層1** |
-| `macro (2000)` | `ALERT_THRESHOLD` | **階層1** |
-| `macro (5)` | `LOCAL_RETRY_MAX` | 自ファイル |
+| 型 | 名前 | 定義値 | 定義元 |
+|---|---|---|---|
+| `macro` | `SYSTEM_TICK_MS` | `10` | **階層3** |
+| `macro` | `MAX_SENSOR_COUNT` | `8` | **階層3** |
+| `macro` | `SENSOR_ERROR_LIMIT` | `3` | **階層2** |
+| `macro` | `WARN_THRESHOLD` | `1000` | **階層1** |
+| `macro` | `ALERT_THRESHOLD` | `2000` | **階層1** |
+| `macro` | `LOCAL_RETRY_MAX` | `5` | 自ファイル |
 
 ### 呼び出し関数
 

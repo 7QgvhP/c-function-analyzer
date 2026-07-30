@@ -317,7 +317,8 @@ int check(int v) {
 
         const m = findVar(result.macroVariables ?? [], 'MAX_LIMIT');
         assert.ok(m, `マクロ変数に MAX_LIMIT が含まれること: ${names(result.macroVariables ?? [])}`);
-        assert.equal(m.type, 'macro (10)');
+        assert.equal(m.type, 'macro');
+        assert.equal(m.value, '10');
         assert.equal(m.definition?.filePath, 'file:///virtual/limits.h');
     });
 
@@ -346,7 +347,8 @@ int check(int v) {
 
         const m = findVar(result.macroVariables ?? [], 'LOCAL_MAX');
         assert.ok(m, 'マクロ変数に LOCAL_MAX が含まれること');
-        assert.equal(m.type, 'macro (42)');
+        assert.equal(m.type, 'macro');
+        assert.equal(m.value, '42');
         assert.equal(m.definition?.filePath, undefined, '自ファイル内のため filePath は未設定');
         assert.equal(m.definition?.line, 0);
     });

@@ -43,6 +43,11 @@ export interface VariableInfo {
     highlightable?: boolean;
     /** 宣言・定義されている位置。特定できなかった場合は未設定 */
     definition?: DefinitionLocation;
+    /**
+     * 定義値（マクロの `#define` 値）。型名とは別の欄として表示されます。
+     * 値を持たない項目では未設定です。
+     */
+    value?: string;
 }
 
 /** インクルードファイルの解決結果 */
@@ -167,9 +172,6 @@ interface FileScopeSymbols {
 
 /** インクルードを辿る深さの上限（循環や過剰な探索を防ぐ） */
 const MAX_INCLUDE_DEPTH = 8;
-
-/** マクロ定義値を型名バッジに表示する際の最大文字数 */
-const MACRO_VALUE_MAX_LENGTH = 24;
 
 /** フェーズ3: 関数シグネチャの解析結果 */
 interface SignatureInfo {
@@ -1018,22 +1020,16 @@ function shouldClassifyAsMacro(
 }
 
 /**
- * マクロ定義を型名バッジ用の表示文字列に整形します。
+ * マクロの型名欄に表示する文字列を返します。
+ *
+ * 定義値は型名には含めず、別の欄（`VariableInfo.value`）として表示します。
  *
  * @param macro マクロ定義（未解決の場合は undefined）
- * @returns 表示用の文字列
+ * @returns 型名欄の表示文字列
  */
 function formatMacroType(macro?: MacroDefinition): string {
-    if (!macro) {
-        return 'macro (推定)';
-    }
-    if (!macro.value) {
-        return 'macro';
-    }
-    const value = macro.value.length > MACRO_VALUE_MAX_LENGTH
-        ? macro.value.slice(0, MACRO_VALUE_MAX_LENGTH) + '…'
-        : macro.value;
-    return `macro (${value})`;
+    // 定義が見つからない場合のみ、推定であることを示す
+    return macro ? 'macro' : 'macro (推定)';
 }
 
 /**
@@ -1425,6 +1421,10 @@ function buildResult(
                 };
                 if (macro) {
                     entry.definition = macro.definition;
+                    // 定義値は型名ではなく専用の欄に表示する
+                    if (macro.value) {
+                        entry.value = macro.value;
+                    }
                 }
                 macroVariables.push(entry);
             } else {
