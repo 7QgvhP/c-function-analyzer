@@ -41,11 +41,80 @@ flowchart TD
 
 | フェーズ | 関数名 |
 |---|---|
+| 0 | `parseWithModifierMacroRepair`（`src/macroRepair.ts`、パース時に適用） |
 | 1 | `collectFileScopeSymbols` / `collectIncludedSymbols` |
 | 2 | `findFunctionAtCursor` |
 | 3 | `parseSignature` |
 | 4 | `analyzeBody` |
 | 5 | `buildResult` |
+
+---
+
+## フェーズ 0: 修飾子マクロによるパース崩れの修復 (`macroRepair.ts`)
+
+解析に入る前に、ソースのパース結果を必要に応じて修復します。解析対象ファイル（`extension.ts`）とインクルードファイル（`includeResolver.ts`）の双方に適用されます。
+
+### 問題
+
+組み込み系のCコードでは、記憶域クラスをマクロで隠す記法が広く使われます。
+
+```c
+#define GLOBAL extern
+GLOBAL BYTE hoge;
+```
+
+tree-sitter はプリプロセッサを展開しないため、`GLOBAL` を型名と解釈し、本来の型である `BYTE` を ERROR ノードへ追いやります。
+
+```
+declaration
+  type_identifier  |GLOBAL|      ← 型名として扱われる
+  ERROR
+    identifier     |BYTE|        ← 本来の型が捨てられる
+  identifier       |hoge|
+```
+
+その結果、型名が `GLOBAL` と表示され、さらに `BYTE` がグローバル変数として誤検出されます。
+
+### 修復方式
+
+崩れ方は記法ごとに大きく異なり（ポインタ・配列・初期化子・`unsigned` の有無などで7通り以上のAST形状になる）、崩れたASTを個別に補正するのは現実的ではありません。そのため、**先頭のマクロ部分を同じ長さの空白へ置き換えて再パースする**方式を採ります。
+
+```c
+GLOBAL BYTE hoge;   →   "      BYTE hoge;"
+```
+
+文字数が変わらないため、行・列・オフセットはすべて元のソースと一致します。定義位置ジャンプやハイライトなど、下流の処理は一切変更不要です。
+
+### 修復対象の判定
+
+以下をすべて満たす `declaration` / `function_definition` の先頭トークンを対象とします。
+
+| 条件 | 理由 |
+|---|---|
+| 先頭の子が `type_identifier` または `identifier` | 素の識別子で始まる宣言のみが対象（`int` などのキーワードは別ノード種別） |
+| ボディ（`compound_statement`）の外側にエラーまたは欠落トークンがある | `MyType func(void) { 壊れたボディ }` のような正当な型名を誤って除去しないため |
+
+`GLOBAL unsigned char uc;` のように先頭マクロが `sized_type_specifier` へ取り込まれる場合は、その内側の先頭要素を対象とします。
+
+### 安全策
+
+再パース後の**エラー数が実際に減った場合のみ**修復結果を採用します。誤検出により解析結果が悪化することはなく、正常なコードや本当に構文エラーがあるコードはそのまま扱われます。また、空白化するのは検出した箇所のみのため、`#define GLOBAL extern` の記述自体は影響を受けません。
+
+### 対応する記法
+
+| 記法 | 修復後の型名 |
+|---|---|
+| `GLOBAL BYTE hoge;` | `BYTE` |
+| `GLOBAL BYTE *phoge;` | `BYTE` |
+| `GLOBAL BYTE arr[10];` | `BYTE` |
+| `GLOBAL BYTE hoge = 0;` | `BYTE` |
+| `GLOBAL unsigned char uc;` | `unsigned char` |
+| `GLOBAL const BYTE cb;` | `BYTE` |
+| `GLOBAL struct Foo st;` | `struct Foo` |
+| `GLOBAL BYTE a, b;` | `BYTE` |
+| `GLOBAL S16 hal_read(void);` | `S16`（呼び出し関数の戻り値型） |
+
+関数定義（`GLOBAL void func(void) { ... }`）および関数内のローカル宣言（`LOCAL BYTE tmp;`）も対象です。
 
 ---
 

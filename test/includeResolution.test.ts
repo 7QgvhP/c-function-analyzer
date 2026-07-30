@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import Parser = require('web-tree-sitter');
 import { analyzeCFunction, AnalysisResult, IncludeResolver, ResolvedInclude } from '../src/analyzer';
 import { getParser, names, findVar } from './support/parse';
+import { parseWithModifierMacroRepair } from '../src/macroRepair';
 
 /**
  * メモリ上のソース群からインクルードを解決する疑似リゾルバです。
@@ -50,13 +51,16 @@ async function analyzeWithIncludes(
     files: Record<string, string> = {}
 ): Promise<{ result: AnalysisResult; resolver: MemoryIncludeResolver }> {
     const parser = await getParser();
-    const resolver = new MemoryIncludeResolver(files, (source: string) => parser.parse(source));
+    const resolver = new MemoryIncludeResolver(
+        files,
+        (source: string) => parseWithModifierMacroRepair(parser, source)
+    );
     const cursorLine = mainSource.split('\n').findIndex(line => line.includes(signatureHint));
     if (cursorLine < 0) {
         throw new Error(`シグネチャ "${signatureHint}" を含む行が見つかりません。`);
     }
 
-    const result = analyzeCFunction(parser.parse(mainSource), cursorLine, true, {
+    const result = analyzeCFunction(parseWithModifierMacroRepair(parser, mainSource), cursorLine, true, {
         includeResolver: resolver,
         currentFilePath: 'file:///virtual/main.c'
     });

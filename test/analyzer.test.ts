@@ -1334,3 +1334,65 @@ void work(void) {
         assert.ok(names(r.internalVariables).includes('total'), '内部変数に total が含まれること');
     });
 });
+
+describe('修飾子マクロ付きのグローバル変数', () => {
+    test('GLOBAL BYTE hoge; の型はマクロ名ではなく BYTE になる', async () => {
+        const r = await analyzeOrThrow(`
+#define GLOBAL extern
+typedef unsigned char BYTE;
+
+GLOBAL BYTE hoge;
+
+void work(void) {
+    hoge = 1;
+}
+`, 'void work(');
+        const v = findVar(r.outputs, 'hoge');
+        assert.ok(v, `出力に hoge が含まれること: ${names(r.outputs)}`);
+        assert.equal(v!.type, 'BYTE');
+    });
+
+    test('マクロ名が変数として誤検出されない', async () => {
+        const r = await analyzeOrThrow(`
+#define GLOBAL extern
+GLOBAL BYTE hoge;
+
+void work(void) {
+    hoge = 1;
+}
+`, 'void work(');
+        const all = [...names(r.inputs), ...names(r.outputs), ...names(r.internalVariables)];
+        assert.ok(!all.includes('GLOBAL'), `GLOBAL が変数として現れないこと: ${all}`);
+        assert.ok(!all.includes('BYTE'), `BYTE が変数として現れないこと: ${all}`);
+    });
+
+    test('ポインタ・配列の修飾子マクロ付き宣言も型が取れる', async () => {
+        const r = await analyzeOrThrow(`
+#define GLOBAL extern
+GLOBAL BYTE *p_data;
+GLOBAL BYTE buffer[16];
+
+void work(void) {
+    p_data = 0;
+    buffer[0] = 1;
+}
+`, 'void work(');
+        assert.equal(findVar(r.outputs, 'p_data')!.type, 'BYTE*');
+        // 配列は宣言時の次元で表記される（既存仕様）
+        assert.equal(findVar(r.outputs, 'buffer[16]')!.type, 'BYTE');
+    });
+
+    test('修飾子マクロ付きの関数プロトタイプから戻り値の型が取れる', async () => {
+        const r = await analyzeOrThrow(`
+#define GLOBAL extern
+GLOBAL S16 hal_read(void);
+
+void work(void) {
+    hal_read();
+}
+`, 'void work(');
+        const f = r.calledFunctions.find(x => x.name === 'hal_read');
+        assert.ok(f, `呼び出し関数に hal_read が含まれること: ${names(r.calledFunctions)}`);
+        assert.equal(f!.type, 'S16');
+    });
+});

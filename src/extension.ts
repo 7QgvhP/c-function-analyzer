@@ -4,6 +4,7 @@ import Parser = require('web-tree-sitter');
 import { analyzeCFunction } from './analyzer';
 import { FileIncludeResolver } from './includeResolver';
 import { FunctionAnalyzerWebview } from './webview';
+import { parseWithModifierMacroRepair } from './macroRepair';
 
 /**
  * 拡張機能がアクティベートされた際に実行されます。
@@ -58,8 +59,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
         try {
             // ソースコード全体をパースしてASTを取得
+            // （GLOBAL BYTE hoge; のような修飾子マクロ付き宣言は必要に応じて修復する）
             const sourceCode = document.getText();
-            const tree = parser.parse(sourceCode);
+            const tree = parseWithModifierMacroRepair(parser, sourceCode);
 
             // VS Codeの設定からマクロ分類オプションを取得
             const config = vscode.workspace.getConfiguration('c-function-analyzer');

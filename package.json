@@ -2,7 +2,7 @@
   "name": "c-function-analyzer",
   "displayName": "C Function Analyzer",
   "description": "C言語の選択された関数を簡易解析し、入出力変数や呼び出し関数を別ウィンドウに表示します。",
-  "version": "2.14.0",
+  "version": "2.14.1",
   "publisher": "antigravity",
   "repository": {
     "type": "git",
@@ -77,7 +77,7 @@
     "vscode:prepublish": "npm run compile",
     "compile": "node scripts/copy-wasm.js && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:web-tree-sitter --format=cjs --platform=node",
     "watch": "node scripts/copy-wasm.js && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:web-tree-sitter --format=cjs --platform=node --watch",
-    "build-test": "esbuild test/analyzer.test.ts test/highlight.test.ts test/webviewHtml.test.ts test/includeResolution.test.ts test/includePaths.test.ts --bundle --outdir=dist-test --out-extension:.js=.cjs --external:web-tree-sitter --external:tree-sitter-wasms --format=cjs --platform=node",
+    "build-test": "esbuild test/analyzer.test.ts test/highlight.test.ts test/webviewHtml.test.ts test/includeResolution.test.ts test/includePaths.test.ts test/macroRepair.test.ts --bundle --outdir=dist-test --out-extension:.js=.cjs --external:web-tree-sitter --external:tree-sitter-wasms --format=cjs --platform=node",
     "typecheck": "tsc --noEmit",
     "test": "npm run typecheck && npm run build-test && node --test \"dist-test/**/*.cjs\""
   },
