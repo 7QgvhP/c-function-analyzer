@@ -175,12 +175,26 @@ extern int shared_counter;
 
 ### 関数名の収集 (`collectFileScopeFunctions`)
 
-変数の型情報とは別に、ファイル内で宣言・定義されている**関数の名前**も収集します。
+変数の型情報とは別に、ファイル内で宣言・定義されている**関数の名前と戻り値の型**も収集します。戻り値の型は呼び出し関数の型名欄に表示されます。
 
-| 対象 | 例 |
-|---|---|
-| 関数定義 | `int helper(int x) { ... }` |
-| 関数プロトタイプ宣言 | `int helper(int x);` |
+| 対象 | 例 | 戻り値の型 |
+|---|---|---|
+| 関数定義 | `int helper(int x) { ... }` | `int` |
+| 関数プロトタイプ宣言 | `void log_message(const char *m);` | `void` |
+| ポインタを返す関数 | `char *fetch(void);` | `char*` |
+
+戻り値の型は宣言子の手前までのテキストから取り出します（`extractReturnType`）。関数シグネチャの解析（フェーズ3）と共通の処理です。
+
+#### 関数ポインタ変数との判別
+
+`char *fetch(void);`（ポインタを返す関数）と `int (*fp)(int);`（関数ポインタ変数）は**どちらもポインタ深さが 1** になるため、深さでは判別できません。宣言子を降りる際の**ポインタの位置**で判別します。
+
+| 記述 | 宣言子の構造 | 判定 |
+|---|---|---|
+| `char *fetch(void);` | `pointer_declarator` → `function_declarator` | ポインタが外側 → **関数** |
+| `int (*fp)(int);` | `function_declarator` → `parenthesized_declarator` → `pointer_declarator` | ポインタが内側 → **関数ポインタ変数** |
+
+`function_declarator` を通過した後にポインタが現れた場合を関数ポインタ変数とみなします（`DeclaratorInfo.isFunctionPointer`）。この判定は変数宣言の収集（`collectDeclaredVars`）でも共用しています。
 
 これはフェーズ4で、関数名が値として参照されているだけの場合にグローバル変数と誤分類しないための除外リストとして使用します（詳細は「4.4 識別子の参照・読み取り判定」を参照）。
 
