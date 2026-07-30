@@ -158,6 +158,11 @@ interface FileScopeSymbols {
      * タグ名（`struct Config`）と typedef 名（`HogeStruct`）の双方で引けるよう登録します。
      */
     structs: Map<string, StructMembers>;
+    /**
+     * `typedef` の別名（別名 → 元の型名）。
+     * 定義と typedef を別に書いた場合に、別名から実体を辿るために使用します。
+     */
+    typeAliases: Map<string, string>;
 }
 
 /** インクルードを辿る深さの上限（循環や過剰な探索を防ぐ） */
@@ -371,6 +376,45 @@ function normalizeStructKey(type: string): string {
     return type.replace(/\*+$/, '').trim();
 }
 
+/** 型解決に用いるシンボル情報 */
+interface TypeResolutionContext {
+    /** 構造体・共用体の定義（型名 → メンバ一覧） */
+    structs: Map<string, StructMembers>;
+    /** typedef の別名（別名 → 元の型名） */
+    typeAliases: Map<string, string>;
+}
+
+/**
+ * 型名から構造体・共用体のメンバ一覧を引きます。
+ *
+ * 直接見つからない場合は `typedef` の別名を辿ります。
+ * `typedef struct TagC SeparateAlias;` のように定義と typedef を別に書いた場合、
+ * 別名からは中身を直接引けないためです。多段の typedef にも対応します。
+ *
+ * @param type 型名（ポインタ表記を含んでいてもかまいません）
+ * @param types 構造体定義と typedef 別名
+ * @returns メンバ一覧。解決できない場合は undefined
+ */
+function findStructMembers(type: string, types: TypeResolutionContext): StructMembers | undefined {
+    let key = normalizeStructKey(type);
+    const visited = new Set<string>();
+
+    while (key && !visited.has(key)) {
+        visited.add(key);
+
+        const members = types.structs.get(key);
+        if (members) {
+            return members;
+        }
+        const alias = types.typeAliases.get(key);
+        if (!alias) {
+            return undefined;
+        }
+        key = normalizeStructKey(alias);
+    }
+    return undefined;
+}
+
 /** アクセスパスの解決結果 */
 interface ResolvedAccessPath {
     /** 表示用の名前（各セグメントの添字に宣言された次元を反映したもの） */
@@ -391,13 +435,13 @@ interface ResolvedAccessPath {
  *
  * @param accessPath アクセスパス（例: `hoge[]`、`tbl[].id`、`var_ptr->sub.member`）
  * @param rootVar 根元の変数の型情報
- * @param structs 構造体・共用体の定義
+ * @param types 構造体定義と typedef 別名
  * @returns 表示用の名前と型
  */
 function resolveAccessPath(
     accessPath: string,
     rootVar: { type: string; arrayDimensions: string[] },
-    structs: Map<string, StructMembers>
+    types: TypeResolutionContext
 ): ResolvedAccessPath {
     // 区切り文字（. と ->）を保持したまま分割する
     const parts = accessPath.split(/(\.|->)/);
@@ -417,7 +461,7 @@ function resolveAccessPath(
 
         // 添字を除いた部分がメンバ名
         const memberName = segment.replace(/\[[^\]]*\]/g, '');
-        const members = resolved ? structs.get(normalizeStructKey(current.type)) : undefined;
+        const members = resolved ? findStructMembers(current.type, types) : undefined;
         const member = members ? members.get(memberName) : undefined;
 
         if (member) {
@@ -717,6 +761,45 @@ function resolveTypedefName(typedefNode: Parser.SyntaxNode): string {
 }
 
 /**
+ * フェーズ1: `typedef` の別名を収集します。
+ *
+ * `typedef struct TagC SeparateAlias;` のように定義と typedef を別に書いた場合、
+ * 別名からは構造体の中身を直接引けません。別名 → 元の型名の対応を持つことで、
+ * メンバの型解決時に実体まで辿れるようにします。
+ *
+ * @param rootNode ASTのルートノード
+ * @returns 別名 → 元の型名 のマップ
+ */
+function collectTypeAliases(rootNode: Parser.SyntaxNode): Map<string, string> {
+    const aliases = new Map<string, string>();
+
+    forEachFileScopeNode(rootNode, node => {
+        // 関数ボディ内のローカルな型定義は対象外とする
+        if (node.type === 'function_definition') {
+            return;
+        }
+
+        walk(node, inner => {
+            if (inner.type !== 'type_definition') {
+                return;
+            }
+            const aliasName = resolveTypedefName(inner);
+            const typeNode = inner.childForFieldName('type');
+            if (!aliasName || !typeNode || aliases.has(aliasName)) {
+                return;
+            }
+            const underlying = cleanTypeText(typeNode.text);
+            // 自分自身を指す指定は辿れないため登録しない
+            if (underlying && underlying !== aliasName) {
+                aliases.set(aliasName, underlying);
+            }
+        });
+    });
+
+    return aliases;
+}
+
+/**
  * フェーズ1: 構造体・共用体の定義を収集します。
  *
  * タグ名（`struct Config`）と typedef 名（`HogeStruct`）の双方をキーとして登録し、
@@ -792,7 +875,8 @@ function collectFileScopeSymbols(
         vars: collectFileScopeVars(rootNode, origin),
         functions: collectFileScopeFunctions(rootNode, origin),
         macros: collectMacros(rootNode, origin),
-        structs: collectStructDefinitions(rootNode, origin)
+        structs: collectStructDefinitions(rootNode, origin),
+        typeAliases: collectTypeAliases(rootNode)
     };
 }
 
@@ -824,6 +908,11 @@ function mergeSymbols(into: FileScopeSymbols, from: FileScopeSymbols): void {
     from.structs.forEach((value, key) => {
         if (!into.structs.has(key)) {
             into.structs.set(key, value);
+        }
+    });
+    from.typeAliases.forEach((value, key) => {
+        if (!into.typeAliases.has(key)) {
+            into.typeAliases.set(key, value);
         }
     });
 }
@@ -1253,7 +1342,7 @@ function buildResult(
 
             if (matchingWrites.length > 0) {
                 matchingWrites.forEach(path => {
-                    const resolvedPath = resolveAccessPath(path, paramVar, symbols.structs);
+                    const resolvedPath = resolveAccessPath(path, paramVar, symbols);
                     outputs.push({
                         name: resolvedPath.name,
                         type: resolvedPath.type,
@@ -1265,7 +1354,7 @@ function buildResult(
 
             if (matchingReads.length > 0) {
                 matchingReads.forEach(path => {
-                    const resolvedPath = resolveAccessPath(path, paramVar, symbols.structs);
+                    const resolvedPath = resolveAccessPath(path, paramVar, symbols);
                     inputs.push({
                         name: resolvedPath.name,
                         type: resolvedPath.type,
@@ -1342,7 +1431,7 @@ function buildResult(
                 if (declared) {
                     // 構造体メンバのアクセスを辿って型を解決し、
                     // 配列の次元は名前と型のどちらか一方にのみ表示する
-                    const resolvedPath = resolveAccessPath(path, declared, symbols.structs);
+                    const resolvedPath = resolveAccessPath(path, declared, symbols);
                     target.push({
                         name: resolvedPath.name,
                         type: resolvedPath.type,

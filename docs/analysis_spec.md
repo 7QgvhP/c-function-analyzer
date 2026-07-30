@@ -184,6 +184,19 @@ extern int shared_counter;
 
 これはフェーズ4で、関数名が値として参照されているだけの場合にグローバル変数と誤分類しないための除外リストとして使用します（詳細は「4.4 識別子の参照・読み取り判定」を参照）。
 
+### typedef 別名の収集 (`collectTypeAliases`)
+
+`typedef` の別名（別名 → 元の型名）を収集します。構造体の定義と `typedef` を別に書いた場合、別名からは中身を直接引けないためです。
+
+```c
+struct ConfigTag { unsigned char mode; };
+typedef struct ConfigTag Config;   /* typedef の位置に中身がない */
+```
+
+メンバの型解決（`findStructMembers`）では、型名で構造体定義を引けなかった場合に別名を辿って実体を探します。多段の `typedef` にも対応し、循環している場合は探索済みの型名を記録して停止します。
+
+実体が見つからない場合（前方宣言のみ、システムヘッダ内の型など）は、根元の変数の型をそのまま表示します。
+
 ### マクロ定義の収集 (`collectMacros`)
 
 `#define` からマクロ名・定義値・定義位置を収集します。オブジェクト形式（`#define MAX 10`）と関数形式（`#define SQ(x) ((x)*(x))`）の双方に対応します。

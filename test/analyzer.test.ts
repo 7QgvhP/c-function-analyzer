@@ -1069,6 +1069,88 @@ void update(HogeStruct *data) {
         assert.equal(v.type, 'int', '引数の型 HogeStruct* ではなくメンバの型になること');
     });
 
+    test('定義と typedef を分けて書いた構造体のメンバ型を解決する (v2.12.1)', async () => {
+        // typedef の位置に構造体の中身がないため、別名から実体を辿る必要がある
+        const r = await analyzeOrThrow(`
+struct TagC { int c; };
+typedef struct TagC SeparateAlias;
+SeparateAlias g_c;
+
+void work(void) {
+    g_c.c = 3;
+}
+`, 'void work(');
+        assert.equal(findVar(r.outputs, 'g_c.c')?.type, 'int');
+    });
+
+    test('前方宣言してから定義した構造体のメンバ型を解決する (v2.12.1)', async () => {
+        const r = await analyzeOrThrow(`
+struct TagD;
+typedef struct TagD LateAlias;
+struct TagD { int d; };
+LateAlias *g_d;
+
+void work(void) {
+    g_d->d = 4;
+}
+`, 'void work(');
+        assert.equal(findVar(r.outputs, 'g_d->d')?.type, 'int');
+    });
+
+    test('多段の typedef を辿ってメンバ型を解決する (v2.12.1)', async () => {
+        const r = await analyzeOrThrow(`
+struct TagC { int c; };
+typedef struct TagC SeparateAlias;
+typedef SeparateAlias NestedAlias;
+NestedAlias g_e;
+
+void work(void) {
+    g_e.c = 5;
+}
+`, 'void work(');
+        assert.equal(findVar(r.outputs, 'g_e.c')?.type, 'int');
+    });
+
+    test('分けて typedef した共用体のメンバ型を解決する (v2.12.1)', async () => {
+        const r = await analyzeOrThrow(`
+union TagF { int f; float g; };
+typedef union TagF UnionAlias;
+UnionAlias g_f;
+
+void work(void) {
+    g_f.g = 6.0;
+}
+`, 'void work(');
+        assert.equal(findVar(r.outputs, 'g_f.g')?.type, 'float');
+    });
+
+    test('実体のない typedef では根元の型を維持する (v2.12.1)', async () => {
+        // 循環する typedef でも停止し、解決できない場合は根元の型を表示する
+        const r = await analyzeOrThrow(`
+typedef struct TagG CycleA;
+typedef CycleA CycleB;
+CycleB g_g;
+
+void work(void) {
+    g_g.unknown = 7;
+}
+`, 'void work(');
+        assert.equal(findVar(r.outputs, 'g_g.unknown')?.type, 'CycleB');
+    });
+
+    test('インクルードファイル内で分けて typedef された構造体も解決する (v2.12.1)', async () => {
+        const r = await analyzeOrThrow(`
+struct TagH { short h; };
+typedef struct TagH AliasH;
+AliasH g_h;
+
+void work(void) {
+    g_h.h = 8;
+}
+`, 'void work(');
+        assert.equal(findVar(r.outputs, 'g_h.h')?.type, 'short');
+    });
+
     test('構造体定義が見つからない場合は根元の型を維持する', async () => {
         const r = await analyzeOrThrow(`
 extern struct Unknown ext_data;

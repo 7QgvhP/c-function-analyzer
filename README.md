@@ -62,6 +62,18 @@ var_ptr->sub.member = 30;   // 型は struct Outer* ではなく int と表示
 
 ネストしたメンバ、構造体配列の要素（`tbl[5].id`）、アロー演算子、共用体、ポインタ引数のメンバ（`data->id`）に対応しています。型は `struct Config` のようなタグ名でも、`typedef` で付けた別名でも解決できます。
 
+`typedef` は次のいずれの書き方にも対応します（定義と `typedef` が別のファイルにある場合も解決します）。
+
+```c
+typedef struct { int a; } Direct;              /* 無名構造体を直接 typedef */
+typedef struct Tag { int b; } SameLine;        /* タグ付きで同時に typedef */
+struct TagC { int c; };
+typedef struct TagC Separate;                  /* 定義と typedef を分離 */
+typedef Separate Nested;                       /* typedef の多段重ね */
+```
+
+> 内部変数（`struct Config local;`）と値渡しの構造体引数（`struct Config arg`）は、宣言そのものを表示する箇所のため構造体の型が表示されます。ポインタ引数はメンバへの書き込みが呼び出し元に伝わるため、メンバ単位で分類されます。
+
 ### コード上のハイライト
 
 項目名をクリックすると、エディタ上の該当箇所が一時的に強調表示され、最初の出現位置までスクロールします。配列や構造体のアクセス表現（`hoge[0]`、`hoge[i]`、`ptr->member`）にも対応しています。
