@@ -132,6 +132,49 @@ extern struct Config g_config;
             `配列メンバは名前側に次元が出ること: ${names(result.outputs)}`);
     });
 
+    test('ヘッダ内で定義と typedef を分けて書いた構造体のメンバ型を解決する (v2.12.1)', async () => {
+        // 組込みコードでよく使われる書き方。typedef の位置に中身がないため別名から実体を辿る
+        const { result } = await analyzeWithIncludes(`#include "types.h"
+
+void setup(void) {
+    g_cfg.mode = 1;
+}
+`, 'void setup(', {
+            'types.h': `#ifndef TYPES_H
+#define TYPES_H
+struct ConfigTag { unsigned char mode; };
+typedef struct ConfigTag Config;
+extern Config g_cfg;
+#endif
+`
+        });
+
+        const v = findVar(result.outputs, 'g_cfg.mode');
+        assert.ok(v, `出力に g_cfg.mode が含まれること: ${names(result.outputs)}`);
+        assert.equal(v.type, 'unsigned char', 'メンバの型に解決されること');
+    });
+
+    test('構造体定義と typedef が別のヘッダにある場合も解決する (v2.12.1)', async () => {
+        const { result } = await analyzeWithIncludes(`#include "alias.h"
+
+void setup(void) {
+    g_cfg.mode = 1;
+}
+`, 'void setup(', {
+            'alias.h': `#include "tag.h"
+typedef struct ConfigTag Config;
+extern Config g_cfg;
+`,
+            'tag.h': `struct ConfigTag { unsigned char mode; };\n`
+        });
+
+        assert.equal(
+            findVar(result.outputs, 'g_cfg.mode')?.type,
+            'unsigned char',
+            'ファイルを跨いでも解決されること'
+        );
+    });
+
     test('解析対象ファイル自身の宣言をインクルード側より優先する', async () => {
         const { result } = await analyzeWithIncludes(`#include "config.h"
 

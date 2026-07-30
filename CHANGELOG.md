@@ -2,6 +2,33 @@
 
 本プロジェクト（C Function Analyzer）のすべての変更は、このファイルに記録されます。
 
+## [2.12.1] - 2026-07-29
+### 修正
+* 構造体の定義と `typedef` を別に書いた場合に、メンバの型ではなく構造体自体の型が表示される不具合を修正。
+
+```c
+struct ConfigTag { unsigned char mode; };
+typedef struct ConfigTag Config;   /* typedef の位置に中身がない */
+Config g_cfg;
+
+g_cfg.mode = 1;   /* 従来は Config、修正後は unsigned char */
+```
+
+  * 従来は「`typedef` と同じ場所に構造体の中身が書かれている場合」のみ別名で引けるようにしていたため、定義と `typedef` を分けた書き方では実体に辿り着けませんでした。
+  * `typedef` の別名（別名 → 元の型名）を収集し、メンバの型解決時に実体まで辿るようにしました。
+  * 次のいずれの書き方にも対応します。定義と `typedef` が別のファイルにある場合も解決します。
+
+| 書き方 | 例 |
+|---|---|
+| 定義と `typedef` を分離 | `struct Tag { ... };` + `typedef struct Tag Alias;` |
+| 前方宣言してから定義 | `struct Tag;` + `typedef struct Tag Alias;` + `struct Tag { ... };` |
+| `typedef` の多段重ね | `typedef Alias1 Alias2;` |
+| 共用体を分けて `typedef` | `union Tag { ... };` + `typedef union Tag Alias;` |
+
+  * 実体が見つからない `typedef`（前方宣言のみなど）や循環する `typedef` では、従来どおり根元の型を表示します。
+
+> 補足: 内部変数（`struct Config local;`）と値渡しの構造体引数（`struct Config arg`）は、宣言そのものを表示する箇所のため構造体の型を表示します。これは意図した動作です。
+
 ## [2.12.0] - 2026-07-29
 ### 追加
 * 設定 `c-function-analyzer.searchWorkspaceByFileName` を追加（既定で有効）。`#include "..."` が探索パスで見つからなかった場合に、**ワークスペース内をファイル名で検索**します。
