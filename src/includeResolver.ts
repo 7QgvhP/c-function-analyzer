@@ -10,6 +10,7 @@ import * as vscode from 'vscode';
 import Parser = require('web-tree-sitter');
 import { IncludeResolver, ResolvedInclude } from './analyzer';
 import { buildFileNameSearchCandidates, buildIncludeCandidates, FileNameIndex } from './includePaths';
+import { parseWithModifierMacroRepair } from './macroRepair';
 
 /** パース結果のキャッシュエントリ */
 interface CacheEntry {
@@ -281,7 +282,8 @@ export class FileIncludeResolver implements IncludeResolver {
         let tree: Parser.Tree;
         try {
             const source = fs.readFileSync(fsPath, 'utf8');
-            tree = this.parser.parse(source);
+            // ヘッダ側の GLOBAL BYTE hoge; のような修飾子マクロ付き宣言も修復する
+            tree = parseWithModifierMacroRepair(this.parser, source);
         } catch {
             return null;
         }

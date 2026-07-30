@@ -7,6 +7,7 @@
 import * as path from 'path';
 import Parser = require('web-tree-sitter');
 import { analyzeCFunction, AnalysisResult, VariableInfo } from '../../src/analyzer';
+import { parseWithModifierMacroRepair } from '../../src/macroRepair';
 
 /** 初期化済みパーサーのキャッシュ（初期化コストが高いため再利用する） */
 let cachedParser: Parser | null = null;
@@ -69,7 +70,8 @@ export async function analyze(
         throw new Error(`シグネチャ "${signatureHint}" を含む行がソース内に見つかりません。`);
     }
 
-    const tree = parser.parse(source);
+    // 本番（extension.ts）と同じ経路にするため、修飾子マクロの修復を通す
+    const tree = parseWithModifierMacroRepair(parser, source);
     return analyzeCFunction(tree, cursorLine, classifyAllUppercaseAsMacros);
 }
 
