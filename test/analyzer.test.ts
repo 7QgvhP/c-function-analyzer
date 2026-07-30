@@ -582,6 +582,86 @@ void work(void) {
         assert.ok(!names(r.inputs).includes('fp'), `入力に fp が含まれないこと: ${names(r.inputs)}`);
     });
 
+    test('呼び出し関数に戻り値の型を持たせる (v2.14.0)', async () => {
+        const r = await analyzeOrThrow(`
+int compute(int v);
+void log_message(const char *m);
+char *fetch(void);
+
+void work(void) {
+    compute(1);
+    log_message("hello");
+    fetch();
+}
+`, 'void work(');
+        const typeOf = (name: string) => r.calledFunctions.find(f => f.name === name)?.type;
+        assert.equal(typeOf('compute'), 'int');
+        assert.equal(typeOf('log_message'), 'void', 'void も明示すること');
+        assert.equal(typeOf('fetch'), 'char*', 'ポインタ戻り値はアスタリスク付きとなること');
+    });
+
+    test('関数定義からも戻り値の型を取得する (v2.14.0)', async () => {
+        const r = await analyzeOrThrow(`
+static void helper(int x) {
+    (void)x;
+}
+
+void work(void) {
+    helper(1);
+}
+`, 'void work(');
+        assert.equal(
+            r.calledFunctions.find(f => f.name === 'helper')?.type,
+            'static void',
+            '修飾子を含めて表示すること'
+        );
+    });
+
+    test('ポインタを返す関数と関数ポインタ変数を判別する (v2.14.0)', async () => {
+        // どちらもポインタ深さ1になるため、宣言子の構造で判別する必要がある
+        const r = await analyzeOrThrow(`
+char *fetch(void);   /* ポインタを返す関数 */
+int (*fp)(int);      /* 関数ポインタ変数 */
+
+void work(void) {
+    fetch();
+    fp(1);
+}
+`, 'void work(');
+        const fetch = r.calledFunctions.find(f => f.name === 'fetch');
+        assert.ok(fetch, `呼び出し関数に fetch が含まれること: ${names(r.calledFunctions)}`);
+        assert.equal(fetch.type, 'char*', 'ポインタ戻り値の型が取得できること');
+        assert.ok(fetch.definition, '関数として定義位置が記録されること');
+
+        // 関数ポインタ変数は関数宣言ではないため、戻り値の型を持たない
+        assert.equal(r.calledFunctions.find(f => f.name === 'fp')?.type, undefined);
+    });
+
+    test('宣言が見つからない呼び出し関数には型を持たせない (v2.14.0)', async () => {
+        const r = await analyzeOrThrow(`
+void work(void) {
+    printf("hello");
+}
+`, 'void work(');
+        const fn = r.calledFunctions.find(f => f.name === 'printf');
+        assert.ok(fn, '呼び出し関数に printf が含まれること');
+        assert.equal(fn.type, undefined, '戻り値の型は特定できないこと');
+    });
+
+    test('マクロ関数は型を macro とし定義値を持たせる (v2.14.0)', async () => {
+        const r = await analyzeOrThrow(`
+#define LOG_MSG(m) printf(m)
+
+void work(void) {
+    LOG_MSG("hello");
+}
+`, 'void work(');
+        const fn = (r.macroFunctions ?? []).find(f => f.name === 'LOG_MSG');
+        assert.ok(fn, `マクロ関数に LOG_MSG が含まれること: ${names(r.macroFunctions ?? [])}`);
+        assert.equal(fn.type, 'macro');
+        assert.equal(fn.value, 'printf(m)');
+    });
+
     test('同一関数の複数回呼び出しを重複排除する', async () => {
         const r = await analyzeOrThrow(`
 void helper(int v);

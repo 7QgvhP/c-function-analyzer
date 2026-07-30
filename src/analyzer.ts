@@ -84,6 +84,14 @@ export interface IncludeResolver {
 export interface FunctionInfo {
     /** 表示名（マクロ関数を含む） */
     name: string;
+    /**
+     * 型名欄に表示する文字列。
+     * 呼び出し関数は戻り値の型（`void` を含む）、マクロ関数は `macro` です。
+     * 宣言が見つからず戻り値の型を特定できない場合は未設定です。
+     */
+    type?: string;
+    /** 定義値（マクロ関数の展開内容）。持たない場合は未設定 */
+    value?: string;
     /** 宣言・定義されている位置。特定できなかった場合は未設定 */
     definition?: DefinitionLocation;
 }
@@ -136,6 +144,14 @@ interface DeclaredVar {
     definition: DefinitionLocation;
 }
 
+/** 関数の宣言・定義の情報 */
+interface FunctionDeclaration {
+    /** 宣言・定義されている位置 */
+    definition: DefinitionLocation;
+    /** 戻り値の型（例: `int`、`void`、`static char*`） */
+    returnType: string;
+}
+
 /** マクロ定義の情報 */
 interface MacroDefinition {
     /** 定義値（`#define MAX_LIMIT 10` の `10`）。値を持たないマクロは空文字列 */
@@ -154,8 +170,8 @@ type StructMembers = Map<string, DeclaredVar>;
 interface FileScopeSymbols {
     /** グローバル変数（名前 → 型名と宣言位置） */
     vars: Map<string, DeclaredVar>;
-    /** 関数（名前 → 定義位置） */
-    functions: Map<string, DefinitionLocation>;
+    /** 関数（名前 → 定義位置と戻り値の型） */
+    functions: Map<string, FunctionDeclaration>;
     /** マクロ（名前 → 定義値と定義位置） */
     macros: Map<string, MacroDefinition>;
     /**
@@ -214,6 +230,14 @@ interface DeclaratorInfo {
      * 関数宣言・関数ポインタ宣言でない場合は null になります。
      */
     ownerFunctionDeclarator: Parser.SyntaxNode | null;
+    /**
+     * 関数ポインタ変数の宣言か（`int (*fp)(int);`）。
+     *
+     * ポインタが function_declarator の内側にある場合に true になります。
+     * ポインタを返す関数（`char *fetch(void);`）はポインタが外側にあるため false です。
+     * どちらもポインタ深さは 1 になるため、この位置関係で判別します。
+     */
+    isFunctionPointer: boolean;
     /** 識別子ノードの位置。名前が解決できなかった場合は null */
     position: DefinitionLocation | null;
 }
@@ -297,6 +321,7 @@ function resolveDeclarator(node: Parser.SyntaxNode, origin?: SymbolOrigin): Decl
     let pointerDepth = 0;
     let arrayDepth = 0;
     let ownerFunctionDeclarator: Parser.SyntaxNode | null = null;
+    let isFunctionPointer = false;
     let position: DefinitionLocation | null = null;
     // 配列の各次元のサイズ。外側の次元から順に見つかるため、最後に反転して並べ直す
     const arrayDimensions: string[] = [];
@@ -305,6 +330,11 @@ function resolveDeclarator(node: Parser.SyntaxNode, origin?: SymbolOrigin): Decl
     while (current) {
         if (current.type === 'pointer_declarator') {
             pointerDepth++;
+            // function_declarator を通過した後に現れるポインタは、関数ポインタ変数を示す
+            // （int (*fp)(int) は内側、char *fetch(void) は外側にポインタがある）
+            if (ownerFunctionDeclarator) {
+                isFunctionPointer = true;
+            }
         } else if (current.type === 'array_declarator') {
             arrayDepth++;
             // サイズ指定がない宣言（int buf[]）では size フィールドを持たない
@@ -335,7 +365,7 @@ function resolveDeclarator(node: Parser.SyntaxNode, origin?: SymbolOrigin): Decl
     // 宣言と同じ並び（内側の次元が先）に戻す（int grid[3][4] → ['3', '4']）
     arrayDimensions.reverse();
 
-    return { name, pointerDepth, arrayDepth, arrayDimensions, ownerFunctionDeclarator, position };
+    return { name, pointerDepth, arrayDepth, arrayDimensions, ownerFunctionDeclarator, isFunctionPointer, position };
 }
 
 /**
@@ -546,7 +576,7 @@ function collectDeclaredVars(
 
         // 関数プロトタイプ宣言（int foo(int);）は変数ではないため除外する。
         // 関数ポインタ変数（int (*fp)(int);）はポインタ宣言を経由するため区別できる。
-        if (info.ownerFunctionDeclarator && info.pointerDepth === 0) {
+        if (info.ownerFunctionDeclarator && !info.isFunctionPointer) {
             continue;
         }
 
@@ -597,8 +627,8 @@ function collectFileScopeVars(
 function collectFileScopeFunctions(
     rootNode: Parser.SyntaxNode,
     origin?: SymbolOrigin
-): Map<string, DefinitionLocation> {
-    const functionNames = new Map<string, DefinitionLocation>();
+): Map<string, FunctionDeclaration> {
+    const functions = new Map<string, FunctionDeclaration>();
 
     forEachFileScopeNode(rootNode, node => {
         // 関数定義: int helper(int x) { ... }
@@ -608,30 +638,41 @@ function collectFileScopeFunctions(
                 const info = resolveDeclarator(declaratorNode, origin);
                 if (info.name && info.position) {
                     // 定義は宣言より優先するため上書きする
-                    functionNames.set(info.name, info.position);
+                    functions.set(info.name, {
+                        definition: info.position,
+                        returnType: extractReturnType(node, declaratorNode, info.pointerDepth)
+                    });
                 }
             }
             return;
         }
 
-        // 関数プロトタイプ宣言: int helper(int x);
-        // （ポインタ深さ 0 で function_declarator を経由するものが該当する。
-        //   int (*fp)(int); のような関数ポインタ変数は pointerDepth > 0 のため対象外）
+        // 関数プロトタイプ宣言: int helper(int x); / char *fetch(void);
+        // （function_declarator を経由し、かつ関数ポインタ変数でないものが該当する。
+        //   int (*fp)(int); のような関数ポインタ変数は isFunctionPointer で除外される）
         if (node.type === 'declaration') {
+            const typeNode = node.childForFieldName('type') || node.child(0);
             for (let i = 0; i < node.childCount; i++) {
                 const child = node.child(i)!;
-                if (child.type !== 'function_declarator') {
+                // 型指定子・区切り文字、および初期化子付き宣言（＝変数）は対象外
+                if (child === typeNode || child.type === ',' || child.type === ';' || child.type === 'init_declarator') {
                     continue;
                 }
                 const info = resolveDeclarator(child, origin);
-                if (info.name && info.position && info.pointerDepth === 0 && !functionNames.has(info.name)) {
-                    functionNames.set(info.name, info.position);
+                if (!info.name || !info.position || !info.ownerFunctionDeclarator || info.isFunctionPointer) {
+                    continue;
+                }
+                if (!functions.has(info.name)) {
+                    functions.set(info.name, {
+                        definition: info.position,
+                        returnType: extractReturnType(node, child, info.pointerDepth)
+                    });
                 }
             }
         }
     });
 
-    return functionNames;
+    return functions;
 }
 
 /**
@@ -760,6 +801,30 @@ function resolveTypedefName(typedefNode: Parser.SyntaxNode): string {
         current = next;
     }
     return '';
+}
+
+/**
+ * 関数の戻り値の型を取り出します。
+ *
+ * 宣言子（declarator）の手前までのテキストが戻り値の型にあたるため、
+ * その範囲を切り出してポインタ深さ分のアスタリスクを付与します。
+ * 関数定義（`function_definition`）とプロトタイプ宣言（`declaration`）の双方に使えます。
+ *
+ * @param node 関数定義またはプロトタイプ宣言のノード
+ * @param declaratorNode 宣言子ノード
+ * @param pointerDepth 戻り値のポインタ深さ
+ * @returns 戻り値の型（例: `int`、`static void`、`char*`）
+ */
+function extractReturnType(
+    node: Parser.SyntaxNode,
+    declaratorNode: Parser.SyntaxNode,
+    pointerDepth: number
+): string {
+    const rawType = node.text
+        .substring(0, declaratorNode.startIndex - node.startIndex)
+        .trim()
+        .replace(/\s+/g, ' '); // 改行や余分な空白を除去
+    return rawType + '*'.repeat(pointerDepth);
 }
 
 /**
@@ -1087,18 +1152,13 @@ function parseSignature(funcNode: Parser.SyntaxNode): SignatureInfo {
         functionName = declaratorInfo.name;
     }
 
-    // 戻り値の型は、declarator以外の部分（最初のいくつかの型指定子ノード）から取得
-    const typeNode = funcNode.childForFieldName('type') || funcNode.child(0);
-    if (typeNode) {
-        // 例: "int", "static void", "struct Data*" など
-        // declaratorの手前までのテキストを結合して戻り値とする
-        const declStart = declaratorNode ? declaratorNode.startIndex : funcNode.endIndex;
-        const rawType = funcNode.text
-            .substring(0, declStart - funcNode.startIndex)
-            .trim()
-            .replace(/\s+/g, ' '); // 改行や余分な空白を除去
-        // ポインタのアスタリスクを型名の末尾に追加
-        returnType = rawType + '*'.repeat(declaratorInfo ? declaratorInfo.pointerDepth : 0);
+    // 戻り値の型は declarator の手前までのテキストから取得する（例: "int", "static void", "struct Data*"）
+    if (declaratorNode) {
+        returnType = extractReturnType(
+            funcNode,
+            declaratorNode,
+            declaratorInfo ? declaratorInfo.pointerDepth : 0
+        );
     }
 
     const params: ParamInfo[] = [];
@@ -1158,7 +1218,7 @@ function parseSignature(funcNode: Parser.SyntaxNode): SignatureInfo {
 function analyzeBody(
     bodyNode: Parser.SyntaxNode | null,
     params: ParamInfo[],
-    fileScopeFunctions: Map<string, DefinitionLocation>
+    fileScopeFunctions: Map<string, FunctionDeclaration>
 ): BodyAnalysis {
     // 解析中に見つかったローカル変数、グローバル変数、呼び出し関数を格納するセット
     const localVars = new Map<string, DeclaredVar>(); // name -> 型名と宣言位置
@@ -1309,16 +1369,25 @@ function buildResult(
         const info: FunctionInfo = { name: func };
         // 関数定義・プロトタイプ宣言、またはマクロ定義があれば、その位置をジャンプ先として持たせる
         const macro = symbols.macros.get(func);
-        const functionDefinition = symbols.functions.get(func);
-        const definition = functionDefinition || (macro ? macro.definition : undefined);
+        const declared = symbols.functions.get(func);
+        const definition = declared ? declared.definition : (macro ? macro.definition : undefined);
         if (definition) {
             info.definition = definition;
         }
 
         // 定義が見つかればそれに従い、見つからなければ大文字かどうかで推定する
-        if (shouldClassifyAsMacro(func, macro !== undefined, functionDefinition !== undefined, classifyAllUppercaseAsMacros)) {
+        if (shouldClassifyAsMacro(func, macro !== undefined, declared !== undefined, classifyAllUppercaseAsMacros)) {
+            // マクロ関数には戻り値の型がないため、変数側と同じく macro と表示する
+            info.type = formatMacroType(macro);
+            if (macro && macro.value) {
+                info.value = macro.value;
+            }
             macroFunctions.push(info);
         } else {
+            // 宣言が見つかった場合のみ戻り値の型を表示する（void も明示する）
+            if (declared) {
+                info.type = declared.returnType;
+            }
             normalCalledFunctions.push(info);
         }
     });

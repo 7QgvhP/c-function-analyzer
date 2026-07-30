@@ -148,11 +148,19 @@ function renderCalledFunctions(funcs: FunctionInfo[]): string {
     return funcs.map(f => {
         // 表示上の末尾 "()" を取り除いた名前を、ハイライト・コピーの対象とする
         const cleanName = escapeHtml(f.name.endsWith('()') ? f.name.slice(0, -2) : f.name);
+        // 呼び出し関数は戻り値の型、マクロ関数は macro を型名欄に表示する
+        const type = f.type ? escapeHtml(f.type) : '';
+        const value = f.value ? escapeHtml(f.value) : '';
+        const valueColumn = value
+            ? `<span class="variable-value" title="${value}">${value}</span>`
+            : '';
         return `
-                <div class="variable-item" data-name="${cleanName}" data-type="" data-value="" data-highlightable="true"${renderDefinitionAttrs(f.definition)}>
+                <div class="variable-item" data-name="${cleanName}" data-type="${type}" data-value="${value}" data-highlightable="true"${renderDefinitionAttrs(f.definition)}>
                     <div class="variable-row">
                         <div class="variable-info">
+                            <span class="variable-type">${type}</span>
                             <span class="variable-name">${escapeHtml(f.name)}</span>${renderAmbiguousMark(f.definition)}
+                            ${valueColumn}
                         </div>
                         <div class="variable-actions">
                             ${renderDefinitionButton(f.definition)}

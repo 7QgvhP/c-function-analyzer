@@ -172,10 +172,33 @@ describe('renderAnalysisHtml: データ属性', () => {
         assert.ok(html.includes('data-type="float"'), '型名がデータ属性として出力されること');
     });
 
-    test('呼び出し関数の data-type は空文字列となる', () => {
-        // 呼び出し関数には型がないため、型名列は空になる
-        const html = renderAnalysisHtml(makeResult({ calledFunctions: [{ name: 'helper' }] }), 'N');
-        assert.ok(html.includes('data-name="helper" data-type=""'), '空の型名が出力されること');
+    test('呼び出し関数に戻り値の型を出力する', () => {
+        const html = renderAnalysisHtml(makeResult({
+            calledFunctions: [{ name: 'helper', type: 'int' }]
+        }), 'N');
+        assert.ok(html.includes('data-name="helper" data-type="int"'), '戻り値の型が出力されること');
+        assert.ok(html.includes('<span class="variable-type">int</span>'), '型名欄に表示されること');
+    });
+
+    test('戻り値が void の呼び出し関数は void と表示する', () => {
+        const html = renderAnalysisHtml(makeResult({
+            calledFunctions: [{ name: 'log_message', type: 'void' }]
+        }), 'N');
+        assert.ok(html.includes('<span class="variable-type">void</span>'), 'void が表示されること');
+    });
+
+    test('宣言が見つからない呼び出し関数の型は空となる', () => {
+        // 標準ライブラリ関数などは戻り値の型を特定できない
+        const html = renderAnalysisHtml(makeResult({ calledFunctions: [{ name: 'printf' }] }), 'N');
+        assert.ok(html.includes('data-name="printf" data-type=""'), '空の型名が出力されること');
+    });
+
+    test('マクロ関数は型名欄に macro と定義値を出力する', () => {
+        const html = renderAnalysisHtml(makeResult({
+            macroFunctions: [{ name: 'LOG_MSG', type: 'macro', value: 'printf(m)' }]
+        }), 'N');
+        assert.ok(html.includes('data-type="macro"'), '型名欄が macro となること');
+        assert.ok(html.includes('>printf(m)</span>'), '定義値が表示されること');
     });
 
     test('呼び出し関数の data-name から末尾の () を取り除く', () => {
