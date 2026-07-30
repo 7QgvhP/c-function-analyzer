@@ -166,14 +166,105 @@ describe('buildIncludeCandidates: excludePaths 設定', () => {
         assert.deepEqual(withEmpty, withoutArg);
     });
 
-    test('除外ディレクトリと同名の別ディレクトリは除外しない', () => {
-        // "variant" を除外しても "variantA" は対象外にならないこと
+    test('区切り文字付きで指定すればディレクトリ単位で判定する', () => {
+        // "./variantA" は区切りを含むためディレクトリ指定として扱われ、部分一致しない
         const candidates = buildIncludeCandidates(
-            'config.h', null, [WORKSPACE], ['variantA'], ['variant']
+            'config.h', null, [WORKSPACE], ['variantA'], ['./variant']
         );
         assert.ok(
             candidates.includes(path.join(WORKSPACE, 'variantA', 'config.h')),
-            '前方一致ではなくディレクトリ単位で判定されること'
+            'ディレクトリ指定では前方一致で除外されないこと'
+        );
+    });
+});
+
+describe('buildIncludeCandidates: excludePaths のフォルダ名指定', () => {
+    test('名前に指定文字列を含むフォルダの配下を除外する', () => {
+        const candidates = buildIncludeCandidates(
+            'config.h',
+            null,
+            [WORKSPACE],
+            ['hed/variantB', 'hed/variantA'],
+            ['variantB']
+        );
+        assert.ok(
+            candidates.includes(path.join(WORKSPACE, 'hed', 'variantA', 'config.h')),
+            'variantA は残ること'
+        );
+        assert.ok(
+            !candidates.includes(path.join(WORKSPACE, 'hed', 'variantB', 'config.h')),
+            '階層の途中にあっても除外されること'
+        );
+    });
+
+    test('部分一致で判定する', () => {
+        const candidates = buildIncludeCandidates(
+            'config.h', null, [WORKSPACE], ['old_backup', 'current'], ['old']
+        );
+        assert.ok(candidates.includes(path.join(WORKSPACE, 'current', 'config.h')), 'current は残ること');
+        assert.ok(
+            !candidates.includes(path.join(WORKSPACE, 'old_backup', 'config.h')),
+            '名前に old を含むフォルダは除外されること'
+        );
+    });
+
+    test('大文字・小文字を区別しない', () => {
+        const candidates = buildIncludeCandidates(
+            'config.h', null, [WORKSPACE], ['VariantB'], ['variantb']
+        );
+        assert.ok(!candidates.includes(path.join(WORKSPACE, 'VariantB', 'config.h')));
+    });
+
+    test('ファイル名は判定対象に含めない', () => {
+        // フォルダのみを対象とするため、variantB.h というファイルは除外されない
+        const candidates = buildIncludeCandidates(
+            'variantB.h', null, [WORKSPACE], [], ['variantB']
+        );
+        assert.ok(candidates.includes(path.join(WORKSPACE, 'variantB.h')), 'ファイル名では除外されないこと');
+    });
+
+    test('ワークスペース外のパスは判定対象にしない', () => {
+        // C:\sdk\old_lib のようなワークスペース外のディレクトリに巻き込まれないこと
+        const sdk = path.resolve('/sdk/old_lib');
+        const candidates = buildIncludeCandidates(
+            'driver.h', null, [WORKSPACE], [sdk], ['old']
+        );
+        assert.ok(
+            candidates.includes(path.join(sdk, 'driver.h')),
+            'ワークスペース外は名前指定の影響を受けないこと'
+        );
+    });
+
+    test('ワークスペースフォルダ自体の名前は判定対象にしない', () => {
+        // ワークスペースが C:\work\old_project でも、その中身は除外されないこと
+        const workspace = path.resolve('/work/old_project');
+        const candidates = buildIncludeCandidates('config.h', null, [workspace], [], ['old']);
+        assert.deepEqual(candidates, normalize([path.join(workspace, 'config.h')]));
+    });
+
+    test('インクルード元ディレクトリの候補も除外できる', () => {
+        const fromFile = path.join(WORKSPACE, 'control', 'variantB', 'main.c');
+        const candidates = buildIncludeCandidates('config.h', fromFile, [WORKSPACE], [], ['variantB']);
+        assert.ok(
+            !candidates.includes(path.join(WORKSPACE, 'control', 'variantB', 'config.h')),
+            'インクルード元と同じディレクトリでも除外されること'
+        );
+    });
+
+    test('ディレクトリ指定とフォルダ名指定を併用できる', () => {
+        const candidates = buildIncludeCandidates(
+            'config.h',
+            null,
+            [WORKSPACE],
+            ['legacy/inc', 'hed/variantB', 'hed/variantA'],
+            ['legacy/inc', 'variantB']
+        );
+        assert.deepEqual(
+            candidates,
+            normalize([
+                path.join(WORKSPACE, 'hed', 'variantA', 'config.h'),
+                path.join(WORKSPACE, 'config.h')
+            ])
         );
     });
 });
@@ -261,6 +352,20 @@ describe('buildFileNameSearchCandidates: ファイル名検索', () => {
 
     test('空の索引では空配列を返す', () => {
         assert.deepEqual(buildFileNameSearchCandidates('config.h', new Map(), [WORKSPACE]), []);
+    });
+
+    test('フォルダ名指定は階層の途中にも及ぶ', () => {
+        const index = makeIndex([
+            'control/variantA/config.h',
+            'control/sub/variantB/config.h',
+            'hed/variantB_old/config.h'
+        ]);
+        const found = buildFileNameSearchCandidates('config.h', index, [WORKSPACE], ['variantB']);
+        assert.deepEqual(
+            found,
+            [path.join(WORKSPACE, 'control', 'variantA', 'config.h')],
+            '名前に variantB を含むフォルダの配下がすべて除外されること'
+        );
     });
 });
 

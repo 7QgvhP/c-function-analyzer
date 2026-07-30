@@ -191,7 +191,7 @@ void INIT_ALL(void);         /* 大文字でも関数として扱われる */
 |---|---|---|
 | `c-function-analyzer.classifyAllUppercaseAsMacros` | `true` | **定義が特定できなかった**シンボルについて、大文字のみの名前をマクロとみなします。定義が見つかったシンボルは名前によらず定義に基づいて分類されるため、本設定の影響を受けません |
 | `c-function-analyzer.includePaths` | `[]` | `#include "..."` を解決する際に追加で探索するディレクトリ |
-| `c-function-analyzer.excludePaths` | `[]` | 探索対象から除外するディレクトリ（配下すべてが対象外） |
+| `c-function-analyzer.excludePaths` | `[]` | 探索対象から除外する場所（配下すべてが対象外）。ディレクトリ指定とフォルダ名指定の2通り |
 | `c-function-analyzer.searchWorkspaceByFileName` | `true` | 探索パスで見つからない場合に、ワークスペース内をファイル名で検索します |
 
 ### includePaths の設定例
@@ -254,7 +254,35 @@ proj/
 }
 ```
 
-`excludePaths` に指定したディレクトリは**配下すべて**が探索対象から外れます。
+### excludePaths の書き方
+
+`excludePaths` は2通りの書き方を受け付けます。どちらも**配下すべて**が探索対象から外れます。
+
+| 書き方 | 判定 | 例 |
+|---|---|---|
+| **ディレクトリ指定**<br>（`/` `\` を含む、または絶対パス） | その場所ちょうど1つ | `"legacy/old_hed"`、`"C:/SDK/deprecated"` |
+| **フォルダ名指定**<br>（区切り文字を含まない） | ワークスペース内で、名前にその文字列を**含む**フォルダすべて | `"variantB"` |
+
+同じ命名のフォルダがプロジェクト内の複数箇所に散らばっている場合は、フォルダ名指定が有効です。
+
+```
+proj/
+├─ control/variantB/       →  除外
+├─ control/sub/variantB/   →  除外（階層が深くても一致）
+├─ hed/variantB_old/       →  除外（部分一致）
+└─ hed/variantA/           →  残る
+```
+
+```json
+{
+  "c-function-analyzer.excludePaths": ["variantB"]
+}
+```
+
+- 大文字・小文字は区別しません
+- 判定対象はフォルダ名のみです。ファイル名（`variantB.h`）は除外されません
+- ワークスペース外のパス（`includePaths` に絶対パスを指定した場合など）は、フォルダ名指定の対象外です
+- **部分一致**のため、意図しないフォルダに一致しないか確認してください（`"old"` は `goldmine` にも一致します）。ちょうど1つのフォルダだけを除外したい場合は `"./variantB"` のように区切り文字を付けてディレクトリ指定にしてください
 
 ## 動作確認用サンプル
 

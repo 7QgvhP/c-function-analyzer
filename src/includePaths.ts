@@ -28,6 +28,112 @@ function isUnderAny(target: string, directories: string[]): boolean {
 }
 
 /**
+ * `excludePaths` の指定を、判定に使える形へ分解した結果です。
+ *
+ * 設定値はディレクトリ指定とフォルダ名指定の2種類を受け付けます。
+ * 区切り文字（`/` `\`）を含むか絶対パスであればディレクトリ指定、
+ * それ以外（`variantB` のような単独の名前）はフォルダ名指定として扱います。
+ */
+interface ExcludeRules {
+    /** 配下すべてを除外するディレクトリの絶対パス一覧 */
+    directories: string[];
+    /** フォルダ名に含まれていれば除外する文字列一覧（小文字化済み） */
+    folderNames: string[];
+}
+
+/**
+ * 設定値がディレクトリ指定かどうかを判定します。
+ *
+ * @param entry 設定に指定された文字列
+ * @returns パス区切りを含む、または絶対パスであれば true
+ */
+function isDirectorySpec(entry: string): boolean {
+    return path.isAbsolute(entry) || /[\\/]/.test(entry);
+}
+
+/**
+ * `excludePaths` の設定値を、ディレクトリ指定とフォルダ名指定へ分解します。
+ *
+ * @param configured 設定 `excludePaths` の値
+ * @param workspaceFolders ワークスペースフォルダの絶対パス一覧
+ * @returns 除外判定に使うルール
+ */
+function buildExcludeRules(configured: string[], workspaceFolders: string[]): ExcludeRules {
+    const directorySpecs: string[] = [];
+    const folderNames: string[] = [];
+
+    configured.forEach(entry => {
+        if (!entry) {
+            return;
+        }
+        if (isDirectorySpec(entry)) {
+            directorySpecs.push(entry);
+        } else {
+            folderNames.push(entry.toLowerCase());
+        }
+    });
+
+    return {
+        directories: resolveDirectories(directorySpecs, workspaceFolders),
+        folderNames
+    };
+}
+
+/**
+ * 対象ファイルが、名前に指定文字列を含むフォルダの配下にあるか判定します。
+ *
+ * 判定対象はワークスペースフォルダからの相対部分のみです。ワークスペース外の
+ * パス（`C:\Users\old_user\...` など）に巻き込まれないようにするためです。
+ * また、フォルダのみを対象とするためファイル名自体は判定に含めません。
+ *
+ * @param target 判定対象の絶対パス（ファイルパス）
+ * @param folderNames フォルダ名に含まれていれば除外する文字列一覧（小文字）
+ * @param workspaceFolders ワークスペースフォルダの絶対パス一覧
+ * @returns 除外対象であれば true
+ */
+function isUnderExcludedFolderName(
+    target: string,
+    folderNames: string[],
+    workspaceFolders: string[]
+): boolean {
+    if (folderNames.length === 0) {
+        return false;
+    }
+
+    const directory = path.dirname(target);
+
+    return workspaceFolders.some(folder => {
+        const relative = path.relative(folder, directory);
+        // '..' 始まりや絶対パスはワークスペース外を示すため対象外
+        if (relative.startsWith('..') || path.isAbsolute(relative)) {
+            return false;
+        }
+        return relative
+            .split(path.sep)
+            .filter(segment => segment !== '')
+            .some(segment => {
+                const lower = segment.toLowerCase();
+                return folderNames.some(name => lower.includes(name));
+            });
+    });
+}
+
+/**
+ * 対象ファイルが除外対象かを判定します。
+ *
+ * @param target 判定対象の絶対パス（ファイルパス）
+ * @param rules 除外ルール
+ * @param workspaceFolders ワークスペースフォルダの絶対パス一覧
+ * @returns 除外対象であれば true
+ */
+function isExcluded(target: string, rules: ExcludeRules, workspaceFolders: string[]): boolean {
+    return (
+        isUnderAny(target, rules.directories) ||
+        isUnderExcludedFolderName(target, rules.folderNames, workspaceFolders)
+    );
+}
+
+/**
  * 設定値のディレクトリ指定を絶対パスへ解決します。
  *
  * 相対パスは各ワークスペースフォルダからの相対として解決し、絶対パスはそのまま使用します。
@@ -77,7 +183,8 @@ function resolveDirectories(configured: string[], workspaceFolders: string[]): s
  * @param fromFsPath インクルード元ファイルの絶対パス。不明な場合は null
  * @param workspaceFolders ワークスペースフォルダの絶対パス一覧
  * @param configuredPaths 設定 `includePaths` の値
- * @param excludedPaths 設定 `excludePaths` の値。このディレクトリ配下は候補から除外します
+ * @param excludedPaths 設定 `excludePaths` の値。ディレクトリ配下、および名前に
+ *                      指定文字列を含むフォルダの配下は候補から除外します
  * @returns 重複を除いた候補パスの配列（優先順）
  */
 export function buildIncludeCandidates(
@@ -88,7 +195,7 @@ export function buildIncludeCandidates(
     excludedPaths: string[] = []
 ): string[] {
     const candidates: string[] = [];
-    const excludedDirs = resolveDirectories(excludedPaths, workspaceFolders);
+    const excludeRules = buildExcludeRules(excludedPaths, workspaceFolders);
     const searchDirs = resolveDirectories(configuredPaths, workspaceFolders);
 
     /**
@@ -98,7 +205,7 @@ export function buildIncludeCandidates(
      */
     const add = (candidate: string) => {
         const normalized = path.normalize(candidate);
-        if (isUnderAny(normalized, excludedDirs)) {
+        if (isExcluded(normalized, excludeRules, workspaceFolders)) {
             return;
         }
         if (!candidates.includes(normalized)) {
@@ -152,7 +259,7 @@ export function buildFileNameSearchCandidates(
         return [];
     }
 
-    const excludedDirs = resolveDirectories(excludedPaths, workspaceFolders);
+    const excludeRules = buildExcludeRules(excludedPaths, workspaceFolders);
     // 記述されたパスを、末尾一致の判定に使える形へ正規化する
     const normalizedInclude = path.normalize(includePath);
     const suffix = path.isAbsolute(normalizedInclude)
@@ -161,7 +268,7 @@ export function buildFileNameSearchCandidates(
 
     return found
         .map(filePath => path.normalize(filePath))
-        .filter(filePath => !isUnderAny(filePath, excludedDirs))
+        .filter(filePath => !isExcluded(filePath, excludeRules, workspaceFolders))
         // "sub/types.h" のような記述では、そのディレクトリ構成を満たすものだけを採用する
         .filter(filePath => filePath.endsWith(suffix) || filePath === normalizedInclude)
         .sort((a, b) => {
