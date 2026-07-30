@@ -7,20 +7,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import * as path from 'path';
-import { buildIncludeCandidates, parseSearchPathEntry } from '../src/includePaths';
-
-/**
- * 仮想的なディレクトリ構成からサブディレクトリを列挙する関数を作ります。
- *
- * @param tree 親ディレクトリ → 直下のサブディレクトリ名 のマップ
- * @returns サブディレクトリを列挙する関数
- */
-function fakeLister(tree: Record<string, string[]>): (dir: string) => string[] {
-    return (dir: string) => {
-        const names = tree[path.normalize(dir)] ?? [];
-        return names.map(name => path.join(dir, name));
-    };
-}
+import { buildFileNameSearchCandidates, buildIncludeCandidates } from '../src/includePaths';
 
 /**
  * 期待値を実行環境のパス表記へ正規化します。
@@ -131,100 +118,6 @@ describe('buildIncludeCandidates: includePaths 設定', () => {
     });
 });
 
-describe('parseSearchPathEntry: 再帰指定の判定', () => {
-    test('末尾が ** の指定を再帰として扱う', () => {
-        assert.deepEqual(parseSearchPathEntry('hed/**'), { base: 'hed', recursive: true });
-        assert.deepEqual(parseSearchPathEntry('hed\\**'), { base: 'hed', recursive: true });
-        assert.deepEqual(parseSearchPathEntry('a/b/**'), { base: path.join('a', 'b'), recursive: true });
-    });
-
-    test('末尾の区切り文字を無視して判定する', () => {
-        assert.deepEqual(parseSearchPathEntry('hed/**/'), { base: 'hed', recursive: true });
-        assert.deepEqual(parseSearchPathEntry('hed/'), { base: 'hed', recursive: false });
-    });
-
-    test('** がない指定は再帰扱いしない', () => {
-        assert.deepEqual(parseSearchPathEntry('hed'), { base: 'hed', recursive: false });
-        assert.deepEqual(parseSearchPathEntry('include/hal'), { base: 'include/hal', recursive: false });
-    });
-
-    test('** 単独はワークスペース全体の再帰指定となる', () => {
-        assert.deepEqual(parseSearchPathEntry('**'), { base: '', recursive: true });
-    });
-});
-
-describe('buildIncludeCandidates: 再帰探索', () => {
-    // proj/hed/{6room_multi, common/{sub}}
-    const TREE = {
-        [path.join(WORKSPACE, 'hed')]: ['6room_multi', 'common'],
-        [path.join(WORKSPACE, 'hed', 'common')]: ['sub']
-    };
-
-    test('配下のディレクトリを浅い順に候補へ加える', () => {
-        const candidates = buildIncludeCandidates(
-            'hoge.h', null, [WORKSPACE], ['hed/**'], [], fakeLister(TREE)
-        );
-        assert.deepEqual(candidates, normalize([
-            path.join(WORKSPACE, 'hed', 'hoge.h'),
-            path.join(WORKSPACE, 'hed', '6room_multi', 'hoge.h'),
-            path.join(WORKSPACE, 'hed', 'common', 'hoge.h'),
-            path.join(WORKSPACE, 'hed', 'common', 'sub', 'hoge.h'),
-            path.join(WORKSPACE, 'hoge.h')
-        ]), '浅いディレクトリが先に並ぶこと');
-    });
-
-    test('再帰指定でないディレクトリは直下のみを探索する', () => {
-        const candidates = buildIncludeCandidates(
-            'hoge.h', null, [WORKSPACE], ['hed'], [], fakeLister(TREE)
-        );
-        assert.deepEqual(candidates, normalize([
-            path.join(WORKSPACE, 'hed', 'hoge.h'),
-            path.join(WORKSPACE, 'hoge.h')
-        ]), 'サブディレクトリは含まれないこと');
-    });
-
-    test('列挙関数がない場合は再帰指定を基準ディレクトリとして扱う', () => {
-        // 後方互換のため、展開できない場合も設定が無効にはならない
-        const candidates = buildIncludeCandidates('hoge.h', null, [WORKSPACE], ['hed/**']);
-        assert.ok(
-            candidates.includes(path.join(WORKSPACE, 'hed', 'hoge.h')),
-            '基準ディレクトリは候補に残ること'
-        );
-    });
-
-    test('除外ディレクトリは再帰展開の対象から外れる', () => {
-        const candidates = buildIncludeCandidates(
-            'hoge.h', null, [WORKSPACE], ['hed/**'], ['hed/common'], fakeLister(TREE)
-        );
-        assert.ok(candidates.includes(path.join(WORKSPACE, 'hed', '6room_multi', 'hoge.h')));
-        assert.ok(
-            !candidates.some(c => c.includes(path.join('hed', 'common'))),
-            'hed/common とその配下が展開されないこと'
-        );
-    });
-
-    test('絶対パスの再帰指定に対応する', () => {
-        const sdk = path.resolve('/sdk');
-        const tree = { [sdk]: ['inc'] };
-        const candidates = buildIncludeCandidates(
-            'driver.h', null, [WORKSPACE], [sdk + path.sep + '**'], [], fakeLister(tree)
-        );
-        assert.ok(candidates.includes(path.join(sdk, 'driver.h')));
-        assert.ok(candidates.includes(path.join(sdk, 'inc', 'driver.h')));
-    });
-
-    test('同じディレクトリを二重に辿らない', () => {
-        // 循環するような列挙を返しても停止すること
-        const cyclic = (dir: string) => [path.join(dir, 'loop')];
-        const candidates = buildIncludeCandidates(
-            'hoge.h', null, [WORKSPACE], ['hed/**'], [], cyclic
-        );
-        // 深さ上限で打ち切られ、有限個で終わる
-        assert.ok(candidates.length > 1, '展開されること');
-        assert.ok(candidates.length < 100, `無限に増えないこと: ${candidates.length}`);
-    });
-});
-
 describe('buildIncludeCandidates: excludePaths 設定', () => {
     test('除外したディレクトリ配下の候補を取り除く', () => {
         const candidates = buildIncludeCandidates(
@@ -282,6 +175,108 @@ describe('buildIncludeCandidates: excludePaths 設定', () => {
             candidates.includes(path.join(WORKSPACE, 'variantA', 'config.h')),
             '前方一致ではなくディレクトリ単位で判定されること'
         );
+    });
+});
+
+describe('buildFileNameSearchCandidates: ファイル名検索', () => {
+    /**
+     * ワークスペース相対のパス一覧から、ファイル名索引を作ります。
+     *
+     * @param relativePaths ワークスペースからの相対パス一覧
+     * @returns ファイル名 → 絶対パス一覧 の索引
+     */
+    function makeIndex(relativePaths: string[]): Map<string, string[]> {
+        const index = new Map<string, string[]>();
+        relativePaths.forEach(relative => {
+            const absolute = path.join(WORKSPACE, path.normalize(relative));
+            const name = path.basename(absolute);
+            const existing = index.get(name);
+            if (existing) {
+                existing.push(absolute);
+            } else {
+                index.set(name, [absolute]);
+            }
+        });
+        return index;
+    }
+
+    test('ファイル名が一致するファイルを見つける', () => {
+        const index = makeIndex(['hed/6room_multi/hoge.h', 'control/other.h']);
+        const found = buildFileNameSearchCandidates('hoge.h', index, [WORKSPACE]);
+        assert.deepEqual(found, [path.join(WORKSPACE, 'hed', '6room_multi', 'hoge.h')]);
+    });
+
+    test('一致しないファイル名では空配列を返す', () => {
+        const index = makeIndex(['hed/hoge.h']);
+        assert.deepEqual(buildFileNameSearchCandidates('missing.h', index, [WORKSPACE]), []);
+    });
+
+    test('複数一致した場合は階層の浅い順に並べる', () => {
+        const index = makeIndex([
+            'a/b/c/config.h',
+            'config.h',
+            'a/config.h'
+        ]);
+        const found = buildFileNameSearchCandidates('config.h', index, [WORKSPACE]);
+        assert.deepEqual(found, [
+            path.join(WORKSPACE, 'config.h'),
+            path.join(WORKSPACE, 'a', 'config.h'),
+            path.join(WORKSPACE, 'a', 'b', 'c', 'config.h')
+        ]);
+    });
+
+    test('同じ深さではパス順に並べる', () => {
+        const index = makeIndex(['zz/config.h', 'aa/config.h']);
+        const found = buildFileNameSearchCandidates('config.h', index, [WORKSPACE]);
+        assert.deepEqual(found, [
+            path.join(WORKSPACE, 'aa', 'config.h'),
+            path.join(WORKSPACE, 'zz', 'config.h')
+        ]);
+    });
+
+    test('ディレクトリを含む記述はそのディレクトリ構成を満たすものだけを採用する', () => {
+        const index = makeIndex([
+            'hed/types.h',          // sub/ 配下ではないため対象外
+            'hed/sub/types.h',      // 一致
+            'other/sub/types.h'     // 一致
+        ]);
+        const found = buildFileNameSearchCandidates('sub/types.h', index, [WORKSPACE]);
+        assert.deepEqual(found, [
+            path.join(WORKSPACE, 'hed', 'sub', 'types.h'),
+            path.join(WORKSPACE, 'other', 'sub', 'types.h')
+        ]);
+    });
+
+    test('除外したディレクトリ配下は検索結果から取り除く', () => {
+        const index = makeIndex(['variantA/config.h', 'variantB/config.h']);
+        const found = buildFileNameSearchCandidates('config.h', index, [WORKSPACE], ['variantB']);
+        assert.deepEqual(found, [path.join(WORKSPACE, 'variantA', 'config.h')]);
+    });
+
+    test('除外はサブディレクトリにも及ぶ', () => {
+        const index = makeIndex(['legacy/old/inc/config.h', 'inc/config.h']);
+        const found = buildFileNameSearchCandidates('config.h', index, [WORKSPACE], ['legacy']);
+        assert.deepEqual(found, [path.join(WORKSPACE, 'inc', 'config.h')]);
+    });
+
+    test('空の索引では空配列を返す', () => {
+        assert.deepEqual(buildFileNameSearchCandidates('config.h', new Map(), [WORKSPACE]), []);
+    });
+});
+
+describe('buildIncludeCandidates: 旧設定との互換', () => {
+    test('末尾の /** は基準ディレクトリとして扱う', () => {
+        // 再帰探索を削除したため、旧設定が残っていても直下の探索として機能させる
+        const candidates = buildIncludeCandidates('types.h', null, [WORKSPACE], ['hed/**']);
+        assert.ok(
+            candidates.includes(path.join(WORKSPACE, 'hed', 'types.h')),
+            `hed 直下が候補に含まれること: ${candidates}`
+        );
+    });
+
+    test('** のみの指定は無視する', () => {
+        const candidates = buildIncludeCandidates('config.h', null, [WORKSPACE], ['**']);
+        assert.deepEqual(candidates, normalize([path.join(WORKSPACE, 'config.h')]));
     });
 });
 

@@ -9,7 +9,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import Parser = require('web-tree-sitter');
 import { IncludeResolver, ResolvedInclude } from './analyzer';
-import { buildIncludeCandidates } from './includePaths';
+import { buildFileNameSearchCandidates, buildIncludeCandidates, FileNameIndex } from './includePaths';
 
 /** パース結果のキャッシュエントリ */
 interface CacheEntry {
@@ -21,12 +21,24 @@ interface CacheEntry {
 /** キャッシュの上限件数（超えた場合は最も古いものから破棄する） */
 const MAX_CACHE_ENTRIES = 64;
 
+/** ファイル名検索の索引に登録する拡張子（インクルードされ得るファイル） */
+const INDEXED_EXTENSIONS = new Set(['.h', '.hpp', '.hh', '.hxx', '.inc', '.c', '.cpp', '.cc', '.cxx']);
+
+/** 索引を作る際に辿らないディレクトリ名（プロジェクトのソースではない領域） */
+const INDEX_SKIP_DIRECTORIES = new Set(['node_modules', 'out']);
+
+/** 索引に登録するファイル数の上限（巨大なワークスペースでの過剰な走査を防ぐ） */
+const MAX_INDEXED_FILES = 50000;
+
 export class FileIncludeResolver implements IncludeResolver {
     /** ファイルパス（fsPath）→ パース結果 のキャッシュ */
     private readonly cache = new Map<string, CacheEntry>();
 
-    /** ディレクトリパス → 直下のサブディレクトリ一覧 のキャッシュ（更新時刻で検証） */
-    private readonly dirCache = new Map<string, { mtimeMs: number; subdirectories: string[] }>();
+    /** ファイル名 → 絶対パス一覧 の索引（初回利用時に構築し、ファイル増減で破棄する） */
+    private fileNameIndex: FileNameIndex | null = null;
+
+    /** ファイルの作成・削除を監視して索引を無効化するウォッチャ */
+    private watcher: vscode.FileSystemWatcher | undefined;
 
     /**
      * @param parser C言語が設定済みの Parser インスタンス
@@ -65,57 +77,107 @@ export class FileIncludeResolver implements IncludeResolver {
     public dispose(): void {
         this.cache.forEach(entry => this.deleteTree(entry.tree));
         this.cache.clear();
-        this.dirCache.clear();
+        this.fileNameIndex = null;
+        if (this.watcher) {
+            this.watcher.dispose();
+            this.watcher = undefined;
+        }
     }
 
     /**
-     * ディレクトリ直下のサブディレクトリを列挙します。
+     * ファイル名検索用の索引を取得します。
      *
-     * 再帰指定（`hed/**`）の展開で繰り返し呼ばれるため、更新時刻が一致する間は
-     * キャッシュを再利用します。ディレクトリの追加・削除は更新時刻に反映されるため、
-     * 構成が変わった場合は自動的に再取得されます。
+     * 初回利用時にワークスペースを走査して構築し、以降は再利用します。
+     * ファイルの作成・削除・リネームを監視しており、変化があれば破棄して作り直します。
      *
-     * @param directory 対象ディレクトリの絶対パス
-     * @returns サブディレクトリの絶対パス一覧
+     * @returns ファイル名 → 絶対パス一覧 の索引
      */
-    private listSubdirectories(directory: string): string[] {
-        let mtimeMs: number;
-        try {
-            const stat = fs.statSync(directory);
-            if (!stat.isDirectory()) {
-                return [];
+    private getFileNameIndex(): FileNameIndex {
+        if (this.fileNameIndex) {
+            return this.fileNameIndex;
+        }
+
+        const index: FileNameIndex = new Map();
+        let indexedCount = 0;
+
+        /**
+         * ディレクトリを再帰的に走査して索引へ登録します。
+         *
+         * @param directory 走査対象のディレクトリ
+         */
+        const walk = (directory: string): void => {
+            if (indexedCount >= MAX_INDEXED_FILES) {
+                return;
             }
-            mtimeMs = stat.mtimeMs;
-        } catch {
-            // 存在しない、またはアクセスできないディレクトリは空として扱う
-            return [];
-        }
+            let entries: fs.Dirent[];
+            try {
+                entries = fs.readdirSync(directory, { withFileTypes: true });
+            } catch {
+                // アクセスできないディレクトリは読み飛ばす
+                return;
+            }
 
-        const cached = this.dirCache.get(directory);
-        if (cached && cached.mtimeMs === mtimeMs) {
-            return cached.subdirectories;
-        }
+            for (const entry of entries) {
+                if (indexedCount >= MAX_INDEXED_FILES) {
+                    return;
+                }
+                if (entry.isDirectory()) {
+                    // ドットで始まるディレクトリ（.git など）とビルド関連は対象外
+                    if (entry.name.startsWith('.') || INDEX_SKIP_DIRECTORIES.has(entry.name)) {
+                        continue;
+                    }
+                    walk(path.join(directory, entry.name));
+                    continue;
+                }
+                if (!entry.isFile() || !INDEXED_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+                    continue;
+                }
+                const filePath = path.join(directory, entry.name);
+                const existing = index.get(entry.name);
+                if (existing) {
+                    existing.push(filePath);
+                } else {
+                    index.set(entry.name, [filePath]);
+                }
+                indexedCount++;
+            }
+        };
 
-        let subdirectories: string[] = [];
+        (vscode.workspace.workspaceFolders || []).forEach(folder => walk(folder.uri.fsPath));
+
+        this.ensureWatcher();
+        this.fileNameIndex = index;
+        return index;
+    }
+
+    /**
+     * ファイルの増減で索引を破棄するウォッチャを用意します（未作成の場合のみ）。
+     */
+    private ensureWatcher(): void {
+        if (this.watcher) {
+            return;
+        }
         try {
-            subdirectories = fs
-                .readdirSync(directory, { withFileTypes: true })
-                .filter(entry => entry.isDirectory())
-                .map(entry => path.join(directory, entry.name));
+            // 索引の対象はファイルの有無のみのため、内容変更（onDidChange）は監視しない
+            this.watcher = vscode.workspace.createFileSystemWatcher('**/*');
+            const invalidate = () => { this.fileNameIndex = null; };
+            this.watcher.onDidCreate(invalidate);
+            this.watcher.onDidDelete(invalidate);
         } catch {
-            subdirectories = [];
+            // ウォッチャを作れない環境では索引をそのまま使い続ける
+            this.watcher = undefined;
         }
-
-        this.dirCache.set(directory, { mtimeMs, subdirectories });
-        return subdirectories;
     }
 
     /**
      * インクルードパスに対応する実ファイルを探します。
      *
      * 探索順は「インクルード元ファイルのディレクトリ」→「設定 includePaths」
-     * →「各ワークスペースフォルダの直下」です。最初に見つかったものを採用しますが、
-     * 同名のファイルが他の候補にも存在する場合は ambiguous として報告します。
+     * →「各ワークスペースフォルダの直下」です。ここで見つからなかった場合、
+     * 設定 `searchWorkspaceByFileName` が有効ならワークスペース内をファイル名で検索します。
+     *
+     * 最初に見つかったものを採用しますが、同名のファイルが他にも存在する場合は
+     * ambiguous として報告します。
      *
      * @param includePath `#include "..."` に記述されたパス
      * @param fromFilePath インクルード元ファイルのURI文字列
@@ -140,18 +202,50 @@ export class FileIncludeResolver implements IncludeResolver {
         const config = vscode.workspace.getConfiguration('c-function-analyzer');
         const configuredPaths = config.get<string[]>('includePaths', []);
         const excludedPaths = config.get<string[]>('excludePaths', []);
+        const searchByFileName = config.get<boolean>('searchWorkspaceByFileName', true);
+        const excluded = Array.isArray(excludedPaths) ? excludedPaths : [];
 
         const candidates = buildIncludeCandidates(
             includePath,
             fromFsPath,
             folders,
             Array.isArray(configuredPaths) ? configuredPaths : [],
-            Array.isArray(excludedPaths) ? excludedPaths : [],
-            directory => this.listSubdirectories(directory)
+            excluded
         );
 
-        // 意図しないファイルを参照していないか利用者が気づけるよう、
-        // 候補のうち実在するものをすべて数える
+        const existing = this.filterExistingFiles(candidates);
+
+        // 通常の探索で見つからない場合のみ、ワークスペース内をファイル名で検索する
+        if (existing.length === 0 && searchByFileName) {
+            const searched = buildFileNameSearchCandidates(
+                includePath,
+                this.getFileNameIndex(),
+                folders,
+                excluded
+            );
+            const foundByName = this.filterExistingFiles(searched);
+            if (foundByName.length === 0) {
+                return null;
+            }
+            return { fsPath: foundByName[0], ambiguous: foundByName.length > 1 };
+        }
+
+        if (existing.length === 0) {
+            return null;
+        }
+        return { fsPath: existing[0], ambiguous: existing.length > 1 };
+    }
+
+    /**
+     * 候補パスのうち、実在するファイルだけを順序を保って返します。
+     *
+     * 意図しないファイルを参照していないか利用者が気づけるよう、
+     * 最初の1件で打ち切らずすべて数えます。
+     *
+     * @param candidates 候補パスの一覧
+     * @returns 実在するファイルの一覧
+     */
+    private filterExistingFiles(candidates: string[]): string[] {
         const existing: string[] = [];
         for (const candidate of candidates) {
             try {
@@ -162,11 +256,7 @@ export class FileIncludeResolver implements IncludeResolver {
                 // アクセス権限などで失敗した候補は読み飛ばす
             }
         }
-
-        if (existing.length === 0) {
-            return null;
-        }
-        return { fsPath: existing[0], ambiguous: existing.length > 1 };
+        return existing;
     }
 
     /**
