@@ -17,22 +17,24 @@ samples/
 
 ```
 sensor_main.c
-  └─ app_config.h                （階層1: includePaths 設定が必要）
+  └─ app_config.h                （階層1: src/ と include/ が別ディレクトリ）
        ├─ hal/sensor_hal.h       （階層2: app_config.h からの相対パス）
        │    └─ platform/types.h  （階層3: sensor_hal.h からの相対パス）
        └─ ../platform/types.h    （重複インクルード。二重展開されない）
 ```
 
-`src/` と `include/` が別ディレクトリのため、**1段目だけ `includePaths` 設定が必要**です。2段目以降はインクルード元ファイルからの相対パスで解決されます。
+1段目は `src/` と `include/` が別ディレクトリなので、インクルード元からの相対パスでは解決できません。`includePaths` 設定、または**ファイル名検索**（既定で有効）で解決されます。2段目以降はインクルード元ファイルからの相対パスで解決されます。
 
 ## 使い方
 
-1. **`samples` フォルダを VS Code で開きます**（`.vscode/settings.json` に `includePaths` 設定が入っています）。
+1. **`samples` フォルダを VS Code で開きます**。
 2. `src/sensor_main.c` を開きます。
 3. `update_sensor_status` の**関数名がある行**にカーソルを置きます。
 4. `Ctrl + Alt + A` を押します。
 
-> プロジェクト全体をワークスペースとして開いている場合は、設定を `["samples/include"]` にしてください。
+`.vscode/settings.json` に `includePaths: ["include"]` を入れてありますが、ファイル名検索が有効であれば**設定なしでも解決できます**（設定を空にして試すと動作を確認できます）。
+
+> プロジェクト全体をワークスペースとして開いている場合も、ファイル名検索により解決されます。
 
 ## 期待される解析結果
 
@@ -86,6 +88,15 @@ sensor_main.c
 - **構造体メンバの型がメンバ自身の型になっていること** — `g_app_config.mode` が `struct AppConfig` ではなく `U8` と表示されます
 - **`#include <stdio.h>` が探索されないこと** — システムインクルードは対象外です
 
-## 設定を外した場合
+## 解決経路の確認
 
-`includePaths` を空にすると、`app_config.h` が見つからなくなり**すべての階層が解決できなくなります**。`global (推定)` / `macro (推定)` に戻ることで、設定の効果を確認できます。
+`includePaths` とファイル名検索の両方を無効にすると、`app_config.h` が見つからなくなり**すべての階層が解決できなくなります**。`global (推定)` / `macro (推定)` に戻ることで、探索の効果を確認できます。
+
+```json
+{
+  "c-function-analyzer.includePaths": [],
+  "c-function-analyzer.searchWorkspaceByFileName": false
+}
+```
+
+`searchWorkspaceByFileName` のみを `true` に戻すと、設定なしでも解決されることが確認できます。

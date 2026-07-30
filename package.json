@@ -2,7 +2,7 @@
   "name": "c-function-analyzer",
   "displayName": "C Function Analyzer",
   "description": "C言語の選択された関数を簡易解析し、入出力変数や呼び出し関数を別ウィンドウに表示します。",
-  "version": "2.11.0",
+  "version": "2.12.0",
   "publisher": "antigravity",
   "repository": {
     "type": "git",
@@ -55,7 +55,12 @@
             "type": "string"
           },
           "default": [],
-          "markdownDescription": "`#include \"...\"` を解決する際に追加で探索するディレクトリを指定します。相対パスはワークスペースフォルダからの相対として解決され、絶対パスはそのまま使用されます。\n\n末尾に `/**` を付けると、そのディレクトリ配下を再帰的に探索します（浅いディレクトリが優先されます）。付けない場合は直下のみを探索します。\n\n探索順は「インクルード元ファイルのディレクトリ」→「本設定のディレクトリ（記述順）」→「ワークスペースフォルダの直下」です。同名のファイルが複数ある場合は先に見つかったものが採用され、解析結果に注意が表示されます。\n\n例: `[\"include\", \"hed/**\", \"C:/SDK/include\"]`"
+          "markdownDescription": "`#include \"...\"` を解決する際に追加で探索するディレクトリを指定します。指定したディレクトリの**直下のみ**を探索します。相対パスはワークスペースフォルダからの相対として解決され、絶対パスはそのまま使用されます。\n\n探索順は「インクルード元ファイルのディレクトリ」→「本設定のディレクトリ（記述順）」→「ワークスペースフォルダの直下」です。ここで見つからない場合は `searchWorkspaceByFileName` によるファイル名検索が行われます。\n\n同名のファイルが複数ある場合は先に見つかったものが採用され、解析結果に注意が表示されます。\n\n例: `[\"include\", \"common/inc\", \"C:/SDK/include\"]`"
+        },
+        "c-function-analyzer.searchWorkspaceByFileName": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "`#include \"...\"` が探索パスで見つからなかった場合に、ワークスペース内をファイル名で検索します。\n\nヘッダが多数のディレクトリに分散している構成でも、`includePaths` を列挙せずに解決できます。`#include \"sub/types.h\"` のようにディレクトリを含む記述の場合は、そのディレクトリ構成を満たすファイルのみを対象とします。\n\n複数見つかった場合は階層の浅いものが採用され、解析結果に注意が表示されます。使用しない側は `excludePaths` で除外してください。\n\n`.git` などのドットで始まるディレクトリ、`node_modules`、`out` は検索対象外です。"
         },
         "c-function-analyzer.excludePaths": {
           "type": "array",
