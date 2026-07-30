@@ -111,12 +111,19 @@ function renderVariableList(vars: VariableInfo[]): string {
         const highlightable = v.highlightable !== false;
         const name = escapeHtml(v.name);
         const type = escapeHtml(v.type);
+        // 定義値（マクロの #define 値）は型名とは別の欄に表示する。
+        // 長い値は省略表示になるため、全文は title で参照できるようにする。
+        const value = v.value ? escapeHtml(v.value) : '';
+        const valueColumn = value
+            ? `<span class="variable-value" title="${value}">${value}</span>`
+            : '';
         return `
-                <div class="variable-item" data-name="${name}" data-type="${type}" data-highlightable="${highlightable}"${renderDefinitionAttrs(v.definition)}>
+                <div class="variable-item" data-name="${name}" data-type="${type}" data-value="${value}" data-highlightable="${highlightable}"${renderDefinitionAttrs(v.definition)}>
                     <div class="variable-row">
                         <div class="variable-info">
                             <span class="variable-type">${type}</span>
                             <span class="variable-name">${name}</span>${renderAmbiguousMark(v.definition)}
+                            ${valueColumn}
                         </div>
                         <div class="variable-actions">
                             ${renderDefinitionButton(v.definition)}
@@ -142,7 +149,7 @@ function renderCalledFunctions(funcs: FunctionInfo[]): string {
         // 表示上の末尾 "()" を取り除いた名前を、ハイライト・コピーの対象とする
         const cleanName = escapeHtml(f.name.endsWith('()') ? f.name.slice(0, -2) : f.name);
         return `
-                <div class="variable-item" data-name="${cleanName}" data-type="" data-highlightable="true"${renderDefinitionAttrs(f.definition)}>
+                <div class="variable-item" data-name="${cleanName}" data-type="" data-value="" data-highlightable="true"${renderDefinitionAttrs(f.definition)}>
                     <div class="variable-row">
                         <div class="variable-info">
                             <span class="variable-name">${escapeHtml(f.name)}</span>${renderAmbiguousMark(f.definition)}
@@ -295,7 +302,8 @@ ${macroFunctions.length > 0 ? renderSection('macro-fn', 'マクロ関数', macro
         /**
          * 対象の項目からコピー用の文字列を組み立てます。
          * 変数と変数は改行で区切り、型名を含める場合はタブで区切ります
-         * （表計算ソフトへ貼り付けると1行1件・2列になります）。
+         * （表計算ソフトへ貼り付けると1行1件・複数列になります）。
+         * 定義値を持つ項目（マクロ）は、3列目に定義値を出します。
          */
         function buildCopyText(items) {
             return items.map(item => {
@@ -304,7 +312,9 @@ ${macroFunctions.length > 0 ? renderSection('macro-fn', 'マクロ関数', macro
                     return name;
                 }
                 const type = item.getAttribute('data-type') || '';
-                return type + '\\t' + name;
+                const value = item.getAttribute('data-value') || '';
+                const columns = value ? [type, name, value] : [type, name];
+                return columns.join('\\t');
             }).join('\\n');
         }
 

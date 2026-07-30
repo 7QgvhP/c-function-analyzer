@@ -41,13 +41,15 @@ interface FakeItem {
  *
  * @param type data-type の値
  * @param name data-name の値
+ * @param value data-value の値（定義値。省略時は空）
  * @returns ダミー要素
  */
-function fakeItem(type: string, name: string): FakeItem {
+function fakeItem(type: string, name: string, value: string = ''): FakeItem {
     return {
         getAttribute: (attr: string) => {
             if (attr === 'data-type') { return type; }
             if (attr === 'data-name') { return name; }
+            if (attr === 'data-value') { return value; }
             return null;
         }
     };
@@ -148,7 +150,7 @@ describe('renderAnalysisHtml: データ属性', () => {
             inputs: [{ name: 'value', type: 'int', details: '' }]
         }), 'N');
         assert.ok(
-            html.includes('data-name="value" data-type="int" data-highlightable="true"'),
+            html.includes('data-name="value" data-type="int" data-value="" data-highlightable="true"'),
             'ハイライト対象として出力されること'
         );
     });
@@ -158,7 +160,7 @@ describe('renderAnalysisHtml: データ属性', () => {
             outputs: [{ name: '戻り値 (return)', type: 'int', details: '', highlightable: false }]
         }), 'N');
         assert.ok(
-            html.includes('data-name="戻り値 (return)" data-type="int" data-highlightable="false"'),
+            html.includes('data-name="戻り値 (return)" data-type="int" data-value="" data-highlightable="false"'),
             'ハイライト対象外として出力されること'
         );
     });
@@ -188,6 +190,61 @@ describe('renderAnalysisHtml: データ属性', () => {
             inputs: [{ name: 'value', type: 'int', details: '' }]
         }), 'N');
         assert.ok(html.includes('<button class="var-copy-button">コピー</button>'), 'ボタンは属性を持たないこと');
+    });
+});
+
+describe('renderAnalysisHtml: 定義値の欄', () => {
+    test('定義値を持つ項目に定義値欄を出力する', () => {
+        const html = renderAnalysisHtml(makeResult({
+            macroVariables: [{ name: 'MAX_LIMIT', type: 'macro', details: '', value: '100' }]
+        }), 'N');
+        assert.ok(html.includes('class="variable-value"'), '定義値欄が出力されること');
+        assert.ok(html.includes('>100</span>'), '定義値が表示されること');
+        assert.ok(html.includes('data-value="100"'), 'データ属性としても出力されること');
+    });
+
+    test('定義値がない項目には定義値欄を出力しない', () => {
+        const html = renderAnalysisHtml(makeResult({
+            inputs: [{ name: 'sensor_id', type: 'int', details: '' }]
+        }), 'N');
+        assert.ok(!html.includes('class="variable-value"'), '定義値欄が出力されないこと');
+        assert.ok(html.includes('data-value=""'), 'データ属性は空となること');
+    });
+
+    test('長い定義値は title 属性で全文を参照できる', () => {
+        // 表示は省略されるため、ホバーで全文が読めるようにしている
+        const longValue = '(BASE_ADDRESS + REGISTER_OFFSET + EXTRA_PADDING)';
+        const html = renderAnalysisHtml(makeResult({
+            macroVariables: [{ name: 'ADDR', type: 'macro', details: '', value: longValue }]
+        }), 'N');
+        assert.ok(html.includes(`title="${longValue}"`), 'title に全文が入ること');
+    });
+
+    test('定義値をHTMLエスケープする', () => {
+        const html = renderAnalysisHtml(makeResult({
+            macroVariables: [{ name: 'X', type: 'macro', details: '', value: '"<script>alert(1)</script>"' }]
+        }), 'N');
+        assert.ok(!html.includes('<script>alert(1)</script>'), '生のスクリプトタグが混入しないこと');
+        assert.ok(html.includes('&lt;script&gt;'), 'エスケープされること');
+    });
+
+    test('定義値を持つ項目のコピーは3列になる', () => {
+        const build = extractBuildCopyText(renderAnalysisHtml(makeResult(), 'N', 'typeAndName'), 'typeAndName');
+        assert.equal(
+            build([fakeItem('macro', 'MAX_LIMIT', '100')]),
+            'macro\tMAX_LIMIT\t100',
+            '型名・名前・定義値の3列になること'
+        );
+    });
+
+    test('定義値を持たない項目のコピーは2列のままとなる', () => {
+        const build = extractBuildCopyText(renderAnalysisHtml(makeResult(), 'N', 'typeAndName'), 'typeAndName');
+        assert.equal(build([fakeItem('int', 'sensor_id')]), 'int\tsensor_id');
+    });
+
+    test('形式が「変数名」のときは定義値を含めない', () => {
+        const build = extractBuildCopyText(renderAnalysisHtml(makeResult(), 'N', 'name'), 'name');
+        assert.equal(build([fakeItem('macro', 'MAX_LIMIT', '100')]), 'MAX_LIMIT');
     });
 });
 

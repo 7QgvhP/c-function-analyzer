@@ -628,7 +628,9 @@ int check(int v) {
     return v > HOGE;
 }
 `, 'int check(');
-        assert.equal(findVar(r.macroVariables ?? [], 'HOGE')?.type, 'macro ((10))');
+        const hoge = findVar(r.macroVariables ?? [], 'HOGE');
+        assert.equal(hoge?.type, 'macro', '型名欄は macro のみとなること');
+        assert.equal(hoge?.value, '(10)', '定義値はコメントを含まないこと');
     });
 
     test('マクロ値の末尾のブロックコメントを型名に含めない (v2.10.1)', async () => {
@@ -639,7 +641,7 @@ int check(int v) {
     return v > LIMIT;
 }
 `, 'int check(');
-        assert.equal(findVar(r.macroVariables ?? [], 'LIMIT')?.type, 'macro (100)');
+        assert.equal(findVar(r.macroVariables ?? [], 'LIMIT')?.value, '100');
     });
 
     test('文字列リテラル内の // をコメントとして扱わない (v2.10.1)', async () => {
@@ -651,8 +653,8 @@ int check(int v) {
 }
 `, 'int check(');
         assert.equal(
-            findVar(r.macroVariables ?? [], 'URL')?.type,
-            'macro ("http://example.com")',
+            findVar(r.macroVariables ?? [], 'URL')?.value,
+            '"http://example.com"',
             '文字列内の // は残ること'
         );
     });
@@ -665,7 +667,7 @@ int check(int v) {
     return v > HALF;
 }
 `, 'int check(');
-        assert.equal(findVar(r.macroVariables ?? [], 'HALF')?.type, 'macro ((100/2))');
+        assert.equal(findVar(r.macroVariables ?? [], 'HALF')?.value, '(100/2)');
     });
 
     test('文字リテラルの後ろの行コメントを除去する (v2.10.1)', async () => {
@@ -676,7 +678,7 @@ int check(int v) {
     return v + DELIM;
 }
 `, 'int check(');
-        assert.equal(findVar(r.macroVariables ?? [], 'DELIM')?.type, "macro ('a')");
+        assert.equal(findVar(r.macroVariables ?? [], 'DELIM')?.value, "'a'");
     });
 
     test('小文字を含むマクロもマクロ変数として分類する (v2.11.0)', async () => {
@@ -690,7 +692,8 @@ int check(int v) {
 `, 'int check(');
         const m = findVar(r.macroVariables ?? [], 'hoge');
         assert.ok(m, `マクロ変数に hoge が含まれること: ${names(r.macroVariables ?? [])}`);
-        assert.equal(m.type, 'macro ((10))');
+        assert.equal(m.type, 'macro', '型名欄は macro のみとなること');
+        assert.equal(m.value, '(10)', '定義値は別の欄に入ること');
         assert.ok(m.definition, '定義位置も記録されること');
         assert.equal(m.definition.line, 1);
         assert.ok(!names(r.inputs).includes('hoge'), '入力変数には含まれないこと');
@@ -773,7 +776,7 @@ int check(int v) {
     return v + DUAL;
 }
 `, 'int check(');
-        assert.equal(findVar(r.macroVariables ?? [], 'DUAL')?.type, 'macro (7)');
+        assert.equal(findVar(r.macroVariables ?? [], 'DUAL')?.value, '7');
         assert.ok(!names(r.inputs).includes('DUAL'), '入力変数には含まれないこと');
     });
 

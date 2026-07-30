@@ -240,6 +240,19 @@ export const WEBVIEW_STYLES = `
             text-overflow: ellipsis;
         }
 
+        /* 定義値（マクロの #define 値）。名前の右に置き、残り幅をすべて使う。
+           別の変数名が書かれていることがあるため、幅を優先的に確保する。 */
+        .variable-value {
+            flex: 1 1 0;
+            min-width: 0;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            color: var(--text-muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
         .variable-name {
             font-family: var(--font-mono);
             font-size: 12px;
