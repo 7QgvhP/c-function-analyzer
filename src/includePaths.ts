@@ -149,19 +149,12 @@ function resolveDirectories(configured: string[], workspaceFolders: string[]): s
         if (!entry) {
             return;
         }
-        // 旧版の再帰指定（"hed/**"）が残っていても基準ディレクトリとして扱えるようにする。
-        // "**" 単独の場合は基準が空になるため、下の判定で読み飛ばされる。
-        const base = entry.replace(/(?:^|[\\/]+)\*\*[\\/]*$/, '');
-        if (!base) {
-            return;
-        }
-
-        if (path.isAbsolute(base)) {
-            resolved.push(path.normalize(base));
+        if (path.isAbsolute(entry)) {
+            resolved.push(path.normalize(entry));
             return;
         }
         workspaceFolders.forEach(folder => {
-            resolved.push(path.resolve(folder, base));
+            resolved.push(path.resolve(folder, entry));
         });
     });
 
@@ -173,16 +166,14 @@ function resolveDirectories(configured: string[], workspaceFolders: string[]): s
  *
  * 探索順は次の通りです。
  *   1. インクルード元ファイルのディレクトリ
- *   2. 設定 `includePaths` に指定されたディレクトリ
- *   3. 各ワークスペースフォルダの直下
+ *   2. 各ワークスペースフォルダの直下
  *
- * 設定値が相対パスの場合は各ワークスペースフォルダからの相対として解決し、
- * 絶対パスの場合はそのまま使用します。いずれも指定されたディレクトリの直下のみを探します。
+ * ここで見つからない場合は、呼び出し側でファイル名検索
+ * （`buildFileNameSearchCandidates`）へフォールバックします。
  *
  * @param includePath `#include "..."` に記述されたパス（例: `config.h`、`sub/types.h`）
  * @param fromFsPath インクルード元ファイルの絶対パス。不明な場合は null
  * @param workspaceFolders ワークスペースフォルダの絶対パス一覧
- * @param configuredPaths 設定 `includePaths` の値
  * @param excludedPaths 設定 `excludePaths` の値。ディレクトリ配下、および名前に
  *                      指定文字列を含むフォルダの配下は候補から除外します
  * @returns 重複を除いた候補パスの配列（優先順）
@@ -191,12 +182,10 @@ export function buildIncludeCandidates(
     includePath: string,
     fromFsPath: string | null,
     workspaceFolders: string[],
-    configuredPaths: string[] = [],
     excludedPaths: string[] = []
 ): string[] {
     const candidates: string[] = [];
     const excludeRules = buildExcludeRules(excludedPaths, workspaceFolders);
-    const searchDirs = resolveDirectories(configuredPaths, workspaceFolders);
 
     /**
      * 候補を追加します（同一パスの重複は無視します）。
@@ -218,12 +207,7 @@ export function buildIncludeCandidates(
         add(path.resolve(path.dirname(fromFsPath), includePath));
     }
 
-    // 2. 設定で指定された探索パス
-    searchDirs.forEach(dir => {
-        add(path.join(dir, includePath));
-    });
-
-    // 3. 各ワークスペースフォルダの直下
+    // 2. 各ワークスペースフォルダの直下
     workspaceFolders.forEach(folder => {
         add(path.join(folder, includePath));
     });

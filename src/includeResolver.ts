@@ -173,9 +173,9 @@ export class FileIncludeResolver implements IncludeResolver {
     /**
      * インクルードパスに対応する実ファイルを探します。
      *
-     * 探索順は「インクルード元ファイルのディレクトリ」→「設定 includePaths」
-     * →「各ワークスペースフォルダの直下」です。ここで見つからなかった場合、
-     * 設定 `searchWorkspaceByFileName` が有効ならワークスペース内をファイル名で検索します。
+     * 探索順は「インクルード元ファイルのディレクトリ」→「各ワークスペースフォルダの直下」です。
+     * ここで見つからなかった場合、設定 `searchWorkspaceByFileName` が有効なら
+     * ワークスペース内をファイル名で検索します。
      *
      * 最初に見つかったものを採用しますが、同名のファイルが他にも存在する場合は
      * ambiguous として報告します。
@@ -201,18 +201,11 @@ export class FileIncludeResolver implements IncludeResolver {
 
         // 設定は変更が即座に反映されるよう、解決のたびに読み取る
         const config = vscode.workspace.getConfiguration('c-function-analyzer');
-        const configuredPaths = config.get<string[]>('includePaths', []);
         const excludedPaths = config.get<string[]>('excludePaths', []);
         const searchByFileName = config.get<boolean>('searchWorkspaceByFileName', true);
         const excluded = Array.isArray(excludedPaths) ? excludedPaths : [];
 
-        const candidates = buildIncludeCandidates(
-            includePath,
-            fromFsPath,
-            folders,
-            Array.isArray(configuredPaths) ? configuredPaths : [],
-            excluded
-        );
+        const candidates = buildIncludeCandidates(includePath, fromFsPath, folders, excluded);
 
         const existing = this.filterExistingFiles(candidates);
 
