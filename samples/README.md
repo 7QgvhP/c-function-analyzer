@@ -73,6 +73,8 @@ sensor_main.c
 | `macro` | `WARN_THRESHOLD` | `1000` | **階層1** |
 | `macro` | `ALERT_THRESHOLD` | `2000` | **階層1** |
 | `macro` | `LOCAL_RETRY_MAX` | `5` | 自ファイル |
+| `enum` | `SENSOR_STATE_BUSY` | `1` | **階層2**（値が省略された列挙子） |
+| `enum` | `SENSOR_STATE_FATAL` | `17` | **階層2**（`0x10` の次。10進で表示） |
 
 ### 呼び出し関数
 
@@ -87,6 +89,7 @@ sensor_main.c
 - **「定義へ」ボタンで各ヘッダの該当行へジャンプできること** — 3階層目の `platform/types.h` まで飛べます
 - **構造体メンバの型がメンバ自身の型になっていること** — `g_app_config.mode` が `struct AppConfig` ではなく `U8` と表示されます
 - **呼び出し関数に戻り値の型が表示されること** — インクルード先のプロトタイプ宣言から取得します（`app_log` は `void`）
+- **`enum` の列挙子が定義値付きで表示されること** — 型名欄が `enum` になり、値の省略や16進からの加算も反映されます
 - **`#include <stdio.h>` が探索されないこと** — システムインクルードは対象外です
 
 ## 解決経路の確認

@@ -562,3 +562,47 @@ void setup(void) {
         assert.equal(v.definition, undefined, '「定義へ」ボタンを出さないこと');
     });
 });
+
+describe('インクルード探索: enum 列挙子', () => {
+    test('ヘッダ内の enum から定義値と定義位置を解決する (v2.18.0)', async () => {
+        const { result } = await analyzeWithIncludes(`#include "types.h"
+
+void work(void) {
+    int a = STATE_RUN;
+}
+`, 'void work(', {
+            'types.h': `#ifndef TYPES_H
+#define TYPES_H
+enum State {
+    STATE_IDLE = 0,
+    STATE_RUN
+};
+#endif
+`
+        });
+
+        const v = result.macroVariables?.find(x => x.name === 'STATE_RUN');
+        assert.ok(v, `マクロ変数に STATE_RUN が含まれること: ${names(result.macroVariables || [])}`);
+        assert.equal(v.type, 'enum');
+        assert.equal(v.value, '1');
+        assert.equal(v.definition?.filePath, 'file:///virtual/types.h');
+        assert.equal(v.definition?.line, 4, '列挙子 STATE_RUN の行を指すこと');
+    });
+
+    test('自ファイルの enum をインクルード側より優先する (v2.18.0)', async () => {
+        const { result } = await analyzeWithIncludes(`#include "types.h"
+
+enum Local { SHARED = 99 };
+
+void work(void) {
+    int a = SHARED;
+}
+`, 'void work(', {
+            'types.h': `enum Remote { SHARED = 1 };\n`
+        });
+
+        const v = result.macroVariables?.find(x => x.name === 'SHARED');
+        assert.equal(v?.value, '99', '自ファイルの定義が優先されること');
+        assert.equal(v?.definition?.filePath, undefined, '自ファイル内のため filePath は未設定');
+    });
+});

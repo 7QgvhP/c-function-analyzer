@@ -166,6 +166,11 @@ interface MacroDefinition {
     value: string;
     /** 定義されている位置 */
     definition: DefinitionLocation;
+    /**
+     * 定義の種別。型名欄の表示に使います。
+     * `#define` は `macro`、`enum` の列挙子は `enum` です。
+     */
+    kind: 'macro' | 'enum';
 }
 
 /** 構造体・共用体のメンバ一覧（メンバ名 → 型情報） */
@@ -808,11 +813,128 @@ function collectMacros(
         const valueNode = node.childForFieldName('value');
         macros.set(nameNode.text, {
             value: valueNode ? normalizeMacroValue(valueNode.text) : '',
-            definition: toDefinitionLocation(nameNode, origin)
+            definition: toDefinitionLocation(nameNode, origin),
+            kind: 'macro'
         });
     });
 
+    collectEnumConstants(rootNode, macros, origin);
+
     return macros;
+}
+
+/**
+ * `enum` の列挙子を収集し、マクロと同じ扱いで登録します。
+ *
+ * 列挙子は `#define` と同じく「名前に値が結び付いた定数」であるため、
+ * マクロ変数のセクションに定義値付きで表示します。型名欄では `enum` と表示して
+ * `#define` 由来のものと区別します。
+ *
+ * 値が省略された列挙子は、C言語の規則に従って直前の値から求めます。
+ *
+ * ```c
+ * enum Color { RED = 1, GREEN, BLUE = 10 };   // RED=1, GREEN=2, BLUE=10
+ * enum { ANON_A, ANON_B };                    // ANON_A=0, ANON_B=1
+ * enum Mode { MODE_OFF = OFFSET, MODE_ON };   // MODE_OFF=OFFSET, MODE_ON=OFFSET + 1
+ * ```
+ *
+ * `#define` が同名で先に登録されている場合は上書きしません（プリプロセッサが先に展開するため）。
+ * 関数ボディ内で定義されたローカルな `enum` は対象外です。
+ *
+ * @param rootNode ASTのルートノード
+ * @param into 登録先のマップ
+ * @param origin 収集元ファイルの情報（解析対象ファイル自身の場合は省略）
+ */
+function collectEnumConstants(
+    rootNode: Parser.SyntaxNode,
+    into: Map<string, MacroDefinition>,
+    origin?: SymbolOrigin
+): void {
+    forEachFileScopeNode(rootNode, node => {
+        // 関数ボディ内で定義されたローカルな enum は対象外とする
+        if (node.type === 'function_definition') {
+            return;
+        }
+
+        walk(node, inner => {
+            if (inner.type !== 'enumerator_list') {
+                return;
+            }
+
+            // 直前に明示された値と、そこからの加算量。
+            // 先頭から値が省略された場合に最初の列挙子が 0 になるよう -1 から始める。
+            let previousValue = '-1';
+            let offsetFromPrevious = 0;
+
+            for (let i = 0; i < inner.childCount; i++) {
+                const child = inner.child(i)!;
+                if (child.type !== 'enumerator') {
+                    continue;
+                }
+                const nameNode = child.childForFieldName('name') || child.child(0);
+                if (!nameNode) {
+                    continue;
+                }
+
+                const valueNode = child.childForFieldName('value');
+                if (valueNode) {
+                    previousValue = valueNode.text.replace(/\s+/g, ' ').trim();
+                    offsetFromPrevious = 0;
+                } else {
+                    offsetFromPrevious++;
+                }
+
+                const value = formatEnumeratorValue(previousValue, offsetFromPrevious);
+                if (!into.has(nameNode.text)) {
+                    into.set(nameNode.text, {
+                        value,
+                        definition: toDefinitionLocation(nameNode, origin),
+                        kind: 'enum'
+                    });
+                }
+            }
+        });
+    });
+}
+
+/**
+ * 値が省略された列挙子の定義値を組み立てます。
+ *
+ * 直前の値が10進・16進の整数であれば加算した結果を返します。数値として解釈できない
+ * 場合（`MODE_OFF = OFFSET` のようにマクロや式を指定した場合）は、式に加算量を
+ * 付けた形（`OFFSET + 1`）を返します。
+ *
+ * @param previousValue 直前に明示された値
+ * @param offset 直前の値からの加算量（明示された値そのものの場合は 0）
+ * @returns 表示用の定義値
+ */
+function formatEnumeratorValue(previousValue: string, offset: number): string {
+    if (offset === 0) {
+        return previousValue;
+    }
+
+    const numeric = parseIntegerLiteral(previousValue);
+    if (numeric !== null) {
+        return String(numeric + offset);
+    }
+    // 数値として解釈できない場合は式のまま加算量を示す
+    return `${previousValue} + ${offset}`;
+}
+
+/**
+ * 整数リテラル（10進・16進・8進）を数値へ変換します。
+ *
+ * @param text 変換対象のテキスト
+ * @returns 変換できた場合は数値、できない場合は null
+ */
+function parseIntegerLiteral(text: string): number | null {
+    // 末尾の型サフィックス（U / L / UL など）は取り除く
+    const literal = text.trim().replace(/[uUlL]+$/, '');
+    if (!/^[+-]?(0[xX][0-9a-fA-F]+|0[0-7]*|[1-9][0-9]*)$/.test(literal)) {
+        return null;
+    }
+    const value = Number(literal);
+    return Number.isSafeInteger(value) ? value : null;
 }
 
 /**
@@ -1218,16 +1340,17 @@ function shouldClassifyAsMacro(
 }
 
 /**
- * マクロの型名欄に表示する文字列を返します。
+ * マクロ・列挙子の型名欄に表示する文字列を返します。
  *
  * 定義値は型名には含めず、別の欄（`VariableInfo.value`）として表示します。
+ * `#define` 由来は `macro`、`enum` の列挙子は `enum` と表示して区別します。
  *
  * @param macro マクロ定義（未解決の場合は undefined）
  * @returns 型名欄の表示文字列
  */
 function formatMacroType(macro?: MacroDefinition): string {
     // 定義が見つからない場合のみ、推定であることを示す
-    return macro ? 'macro' : UNKNOWN_TYPE;
+    return macro ? macro.kind : UNKNOWN_TYPE;
 }
 
 /**

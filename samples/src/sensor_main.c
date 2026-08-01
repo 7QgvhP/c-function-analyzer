@@ -44,6 +44,11 @@ S16 update_sensor_status(U8 channel, S16 *out_corrected, struct SensorReading *r
     /* 階層1の構造体の配列メンバ（型は U8、名前は enabled_channels[MAX_SENSOR_COUNT]） */
     g_app_config.enabled_channels[0] = channel;
 
+    /* 階層2の enum の列挙子（マクロ変数として定義値付きで表示される） */
+    if (retry == SENSOR_STATE_BUSY) {
+        g_warn_level = SENSOR_STATE_FATAL;
+    }
+
     /* 階層2のグローバル構造体配列への書き込み（型は S16 に解決される） */
     g_readings[0].raw_value = raw;
 
