@@ -87,7 +87,24 @@ GLOBAL BYTE hoge;   →   "      BYTE hoge;"
 
 ### 修復対象の判定
 
-以下をすべて満たす `declaration` / `function_definition` の先頭トークンを対象とします。
+修復は2段階に分かれます。崩れ方によって、パースエラーが出る場合と出ない場合があるためです。
+
+#### 段階1: 型名へ吸収されたマクロ (`collectAbsorbedMacroSpans`)
+
+`VOLATILE unsigned long status;` は**エラーなくパースされ**、型名が `VOLATILE unsigned long` になります。
+
+```
+sized_type_specifier  |VOLATILE unsigned long|
+  type_identifier     |VOLATILE|      ← 型名の一部として扱われる
+  unsigned            |unsigned|
+  long                |long|
+```
+
+C言語では `unsigned` などの前に素の識別子が来ることはないため、**`sized_type_specifier` の先頭が `type_identifier` である形は必ず修飾子マクロ**です。エラーの有無によらず対象とします。
+
+#### 段階2: パースが崩れたマクロ (`collectModifierMacroSpans`)
+
+以下をすべて満たす `declaration` / `function_definition` / `field_declaration` の先頭トークンを対象とします。
 
 | 条件 | 理由 |
 |---|---|
@@ -98,7 +115,14 @@ GLOBAL BYTE hoge;   →   "      BYTE hoge;"
 
 ### 安全策
 
-再パース後の**エラー数が実際に減った場合のみ**修復結果を採用します。誤検出により解析結果が悪化することはなく、正常なコードや本当に構文エラーがあるコードはそのまま扱われます。また、空白化するのは検出した箇所のみのため、`#define GLOBAL extern` の記述自体は影響を受けません。
+段階ごとに採用条件が異なります。
+
+| 段階 | 判定の性質 | 採用条件 |
+|---|---|---|
+| 1 | 構文的に確実 | エラー数が**増えない**こと |
+| 2 | 推定を含む | エラー数が**実際に減る**こと |
+
+誤検出により解析結果が悪化することはなく、正常なコードや本当に構文エラーがあるコードはそのまま扱われます。また、空白化するのは検出した箇所のみのため、`#define GLOBAL extern` の記述自体は影響を受けません。
 
 ### 対応する記法
 
@@ -113,8 +137,9 @@ GLOBAL BYTE hoge;   →   "      BYTE hoge;"
 | `GLOBAL struct Foo st;` | `struct Foo` |
 | `GLOBAL BYTE a, b;` | `BYTE` |
 | `GLOBAL S16 hal_read(void);` | `S16`（呼び出し関数の戻り値型） |
+| `VOLATILE unsigned long status;` | `unsigned long`（段階1で修復） |
 
-関数定義（`GLOBAL void func(void) { ... }`）および関数内のローカル宣言（`LOCAL BYTE tmp;`）も対象です。
+関数定義（`GLOBAL void func(void) { ... }`）、関数内のローカル宣言（`LOCAL BYTE tmp;`）、構造体メンバ（`VOLATILE int hw_reg;`）も対象です。
 
 ---
 
@@ -241,6 +266,32 @@ extern int shared_counter;
 | `struct Data { int x; } global_data;` | `struct Data` |
 
 関数ボディ内で定義されたローカルな型は収集対象外です。
+
+#### メンバの走査範囲 (`collectStructMembers`)
+
+構造体本体は、直下の `field_declaration` だけを見ても足りません。次の記法ではメンバが一段内側に入るためです。
+
+| 記法 | AST上の位置 | 扱い |
+|---|---|---|
+| `int plain;` | `field_declaration_list` の直下 | そのまま登録 |
+| `#ifdef X` の内側 | `preproc_ifdef` の内側 | 条件ブロックを透過的に降りて登録 |
+| `union { int a; };`（無名メンバ） | `union_specifier` の `body` の内側 | 中身を**親のメンバとして展開** |
+| `struct { int inner; } nest;` | 同上（宣言子あり） | `nest` に中身の一覧（`inlineMembers`）を持たせる |
+
+無名メンバかどうかは、`field_declaration` が型指定子以外の子（宣言子）を持つかで判別します（`hasFieldDeclarator`）。
+
+`inlineMembers` は `resolveAccessPath` がメンバを引くときに型名検索より優先されます。無名の構造体・共用体はタグ名を持たず、型名から定義を引けないためです。
+
+#### ノードの同一判定 (`isSameNode`)
+
+`web-tree-sitter` は `child()` や `childForFieldName()` を呼ぶたびに**新しいラッパーオブジェクト**を返すため、同じノードでも `===` による比較は false になります。ノードの識別には `id` を使います。
+
+```typescript
+node.child(0) === node.child(0)          // false
+node.child(0).id === node.child(0).id    // true
+```
+
+型指定子を宣言子の走査から除外する箇所（`collectDeclaredVars` など）で使用します。
 
 ### 関数名の収集 (`collectFileScopeFunctions`)
 

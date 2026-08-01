@@ -99,6 +99,21 @@ typedef struct TagC Separate;                  /* 定義と typedef を分離 */
 typedef Separate Nested;                       /* typedef の多段重ね */
 ```
 
+メンバの書き方は次のいずれにも対応します。
+
+```c
+struct Device {
+#ifdef USE_EXTRA
+    int   guarded;          /* プリプロセッサ条件の内側 */
+#endif
+    union { int a; float b; };   /* 無名共用体。a と b は Device のメンバとして扱う */
+    struct { int inner; } nest;  /* 無名構造体。g.nest.inner まで辿れる */
+    VOLATILE unsigned long reg;  /* 修飾子マクロ付き。型は unsigned long */
+    unsigned int flag : 1;       /* ビットフィールド */
+    void (*callback)(int);       /* 関数ポインタ */
+};
+```
+
 > 内部変数（`struct Config local;`）と値渡しの構造体引数（`struct Config arg`）は、宣言そのものを表示する箇所のため構造体の型が表示されます。ポインタ引数はメンバへの書き込みが呼び出し元に伝わるため、メンバ単位で分類されます。
 
 ### 修飾子マクロ付きの宣言
