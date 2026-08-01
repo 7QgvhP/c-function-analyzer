@@ -197,6 +197,15 @@ interface FileScopeSymbols {
 /** インクルードを辿る深さの上限（循環や過剰な探索を防ぐ） */
 const MAX_INCLUDE_DEPTH = 8;
 
+/**
+ * 定義が見つからず、型を特定できなかった場合に型名欄へ表示する文字列です。
+ *
+ * グローバル変数・マクロ・呼び出し関数のいずれも同じ表記にそろえています。
+ * 変数か関数か、マクロかどうかは所属するセクションで判別できるため、
+ * 型名欄では「型が分からない」ことだけを示します。
+ */
+const UNKNOWN_TYPE = '(推定)';
+
 /** フェーズ3: 関数シグネチャの解析結果 */
 interface SignatureInfo {
     functionName: string;
@@ -476,32 +485,46 @@ interface ResolvedAccessPath {
     name: string;
     /** 表示用の型名 */
     type: string;
+    /**
+     * 最終的に参照している変数・メンバの宣言位置。
+     * 解決できなかった場合は undefined（「定義へ」ボタンを表示しません）。
+     */
+    definition?: DefinitionLocation;
+}
+
+/** アクセスパスの起点となる変数の情報 */
+interface AccessPathRoot {
+    type: string;
+    arrayDimensions: string[];
+    definition?: DefinitionLocation;
+    inlineMembers?: StructMembers;
 }
 
 /**
- * アクセスパスを解析し、表示用の名前と型を解決します。
+ * アクセスパスを解析し、表示用の名前・型・定義位置を解決します。
  *
- * 構造体・共用体のメンバアクセスを辿り、**最終的に参照しているメンバの型**を返します。
- * 例: `tbl[].id`（`HogeStruct tbl[5]`、`HogeStruct` に `int id`）は
- *     名前 `tbl[5].id`、型 `int` に解決されます。
+ * 構造体・共用体のメンバアクセスを辿り、**最終的に参照しているメンバ**の型と
+ * 宣言位置を返します。例: `tbl[].id`（`HogeStruct tbl[5]`、`HogeStruct` に `int id`）は
+ * 名前 `tbl[5].id`、型 `int`、定義位置は `int id;` の宣言行に解決されます。
  *
- * 構造体定義やメンバが見つからない場合は、根元の変数の型をそのまま用います
- * （無理に解決するより、根元の型が見えている方が手がかりになるため）。
+ * 構造体定義やメンバが見つからない場合は、根元の型で代用せず
+ * 型を `(推定)`、定義位置を未設定にします。誤った型や無関係な場所へのジャンプを
+ * 提示するより、解決できていないことを明示する方が誤解を招かないためです。
  *
  * @param accessPath アクセスパス（例: `hoge[]`、`tbl[].id`、`var_ptr->sub.member`）
- * @param rootVar 根元の変数の型情報
+ * @param rootVar 根元の変数の型情報と宣言位置
  * @param types 構造体定義と typedef 別名
- * @returns 表示用の名前と型
+ * @returns 表示用の名前・型・定義位置
  */
 function resolveAccessPath(
     accessPath: string,
-    rootVar: { type: string; arrayDimensions: string[] },
+    rootVar: AccessPathRoot,
     types: TypeResolutionContext
 ): ResolvedAccessPath {
     // 区切り文字（. と ->）を保持したまま分割する
     const parts = accessPath.split(/(\.|->)/);
 
-    let current: { type: string; arrayDimensions: string[]; inlineMembers?: StructMembers } = rootVar;
+    let current: AccessPathRoot = rootVar;
     let name = substituteSubscripts(parts[0], current.arrayDimensions);
     let lastSegment = parts[0];
     let resolved = true;
@@ -533,16 +556,19 @@ function resolveAccessPath(
         }
     }
 
-    // 型の決定に用いる変数（解決できた場合は最終メンバ、できなければ根元）
-    const target = resolved ? current : rootVar;
+    // 解決できなかった場合は、根元の型で代用せず「型が分からない」ことを示す
+    if (!resolved) {
+        return { name, type: UNKNOWN_TYPE };
+    }
+
     // 配列の次元は名前と型のどちらか一方にのみ出す。
     // 末尾セグメントが添字を伴う場合は名前側に出ているため、型には付けない。
     const lastHasSubscript = /\[[^\]]*\]/.test(lastSegment);
     const type = lastHasSubscript
-        ? target.type
-        : formatArrayType(target.type, target.arrayDimensions);
+        ? current.type
+        : formatArrayType(current.type, current.arrayDimensions);
 
-    return { name, type };
+    return { name, type, definition: current.definition };
 }
 
 /**
@@ -1201,7 +1227,7 @@ function shouldClassifyAsMacro(
  */
 function formatMacroType(macro?: MacroDefinition): string {
     // 定義が見つからない場合のみ、推定であることを示す
-    return macro ? 'macro' : 'macro (推定)';
+    return macro ? 'macro' : UNKNOWN_TYPE;
 }
 
 /**
@@ -1491,10 +1517,8 @@ function buildResult(
             }
             macroFunctions.push(info);
         } else {
-            // 宣言が見つかった場合のみ戻り値の型を表示する（void も明示する）
-            if (declared) {
-                info.type = declared.returnType;
-            }
+            // 宣言が見つかれば戻り値の型（void も明示）、見つからなければ推定表示
+            info.type = declared ? declared.returnType : UNKNOWN_TYPE;
             normalCalledFunctions.push(info);
         }
     });
@@ -1510,7 +1534,11 @@ function buildResult(
             const matchingReads = Array.from(pointerReads).filter(path => getRootName(path) === p.name);
 
             // 引数の配列はポインタへ減衰するため、次元は型名の '*' で表現済み（次元リストは空）
-            const paramVar = { type: fullType, arrayDimensions: [] as string[] };
+            const paramVar = {
+                type: fullType,
+                arrayDimensions: [] as string[],
+                definition: p.definition
+            };
 
             if (matchingWrites.length > 0) {
                 matchingWrites.forEach(path => {
@@ -1519,7 +1547,7 @@ function buildResult(
                         name: resolvedPath.name,
                         type: resolvedPath.type,
                         details: '出力引数（ポインタ書き込みあり）',
-                        definition: p.definition
+                        definition: resolvedPath.definition
                     });
                 });
             }
@@ -1531,7 +1559,7 @@ function buildResult(
                         name: resolvedPath.name,
                         type: resolvedPath.type,
                         details: '入力引数（ポインタ読み取りあり）',
-                        definition: p.definition
+                        definition: resolvedPath.definition
                     });
                 });
             }
@@ -1612,10 +1640,10 @@ function buildResult(
                         name: resolvedPath.name,
                         type: resolvedPath.type,
                         details,
-                        definition: declared.definition
+                        definition: resolvedPath.definition
                     });
                 } else {
-                    target.push({ name: path, type: 'global (推定)', details });
+                    target.push({ name: path, type: UNKNOWN_TYPE, details });
                 }
             }
         });

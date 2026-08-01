@@ -83,7 +83,7 @@ void bump(void) {
 
         const g = findVar(result.outputs, 'shared_counter');
         assert.ok(g, `出力に shared_counter が含まれること: ${names(result.outputs)}`);
-        assert.equal(g.type, 'int', 'global (推定) ではなくヘッダの型が使われること');
+        assert.equal(g.type, 'int', '(推定) ではなくヘッダの型が使われること');
     });
 
     test('解決した変数の定義位置にインクルードファイルのパスが設定される', async () => {
@@ -357,7 +357,7 @@ int check(int v) {
         assert.equal(m.definition?.line, 0);
     });
 
-    test('解決できないマクロは macro (推定) のままとする', async () => {
+    test('解決できないマクロは (推定) のままとする', async () => {
         const { result } = await analyzeWithIncludes(`int check(int v) {
     return v > UNKNOWN_LIMIT;
 }
@@ -365,7 +365,7 @@ int check(int v) {
 
         const m = findVar(result.macroVariables ?? [], 'UNKNOWN_LIMIT');
         assert.ok(m, 'マクロ変数に UNKNOWN_LIMIT が含まれること');
-        assert.equal(m.type, 'macro (推定)');
+        assert.equal(m.type, '(推定)');
         assert.equal(m.definition, undefined);
     });
 
@@ -462,7 +462,7 @@ void work(void) {
 
         const g = findVar(result.outputs, 'unknown_global');
         assert.ok(g, '解析結果が得られること');
-        assert.equal(g.type, 'global (推定)', '解決できない変数は推定表示のままであること');
+        assert.equal(g.type, '(推定)', '解決できない変数は推定表示のままであること');
     });
 
     test('リゾルバが例外を投げても解析を継続する', async () => {
@@ -518,6 +518,47 @@ void work(void) {
 
         assert.ok(result, '解析結果が返ること');
         const g = findVar(result.outputs, 'shared_counter');
-        assert.equal(g?.type, 'global (推定)', 'リゾルバなしでは従来通り推定表示となること');
+        assert.equal(g?.type, '(推定)', 'リゾルバなしでは従来通り推定表示となること');
+    });
+});
+
+describe('インクルード探索: 構造体メンバの定義位置', () => {
+    test('メンバの定義位置はヘッダ内のメンバ宣言行を指す (v2.17.0)', async () => {
+        const { result } = await analyzeWithIncludes(`#include "types.h"
+
+void setup(void) {
+    g_config.mode = 1;
+}
+`, 'void setup(', {
+            'types.h': `#ifndef TYPES_H
+#define TYPES_H
+struct Config {
+    int mode;
+};
+extern struct Config g_config;
+#endif
+`
+        });
+
+        const v = findVar(result.outputs, 'g_config.mode');
+        assert.ok(v?.definition, '定義位置が記録されること');
+        assert.equal(v.definition.filePath, 'file:///virtual/types.h');
+        assert.equal(v.definition.line, 3, 'メンバ int mode; の行を指すこと');
+    });
+
+    test('解決できないメンバは定義位置を持たない (v2.17.0)', async () => {
+        const { result } = await analyzeWithIncludes(`#include "types.h"
+
+void setup(void) {
+    g_config.unknown = 1;
+}
+`, 'void setup(', {
+            'types.h': `struct Config { int mode; };\nextern struct Config g_config;\n`
+        });
+
+        const v = findVar(result.outputs, 'g_config.unknown');
+        assert.ok(v, '出力に含まれること');
+        assert.equal(v.type, '(推定)');
+        assert.equal(v.definition, undefined, '「定義へ」ボタンを出さないこと');
     });
 });
