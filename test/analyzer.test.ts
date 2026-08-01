@@ -1637,3 +1637,154 @@ void work(int *out) {
         assert.equal(v.definition.line, 1, '引数の宣言行を指すこと');
     });
 });
+
+describe('フェーズ5: enum 列挙子の収集', () => {
+    test('明示された値をそのまま表示する (v2.18.0)', async () => {
+        const r = await analyzeOrThrow(`
+enum Color { RED = 1, BLUE = 10 };
+
+void work(void) {
+    int a = RED;
+    int b = BLUE;
+}
+`, 'void work(');
+        const red = r.macroVariables?.find(v => v.name === 'RED');
+        assert.ok(red, `マクロ変数に RED が含まれること: ${names(r.macroVariables || [])}`);
+        assert.equal(red.type, 'enum', '型名欄は enum とすること');
+        assert.equal(red.value, '1');
+        assert.equal(r.macroVariables?.find(v => v.name === 'BLUE')?.value, '10');
+    });
+
+    test('値が省略された列挙子は直前の値から求める (v2.18.0)', async () => {
+        const r = await analyzeOrThrow(`
+enum Color { RED = 1, GREEN, YELLOW };
+
+void work(void) {
+    int a = GREEN;
+    int b = YELLOW;
+}
+`, 'void work(');
+        assert.equal(r.macroVariables?.find(v => v.name === 'GREEN')?.value, '2');
+        assert.equal(r.macroVariables?.find(v => v.name === 'YELLOW')?.value, '3');
+    });
+
+    test('先頭から値が省略された場合は 0 から始まる (v2.18.0)', async () => {
+        const r = await analyzeOrThrow(`
+enum { ANON_A, ANON_B, ANON_C };
+
+void work(void) {
+    int a = ANON_A;
+    int b = ANON_B;
+    int c = ANON_C;
+}
+`, 'void work(');
+        assert.equal(r.macroVariables?.find(v => v.name === 'ANON_A')?.value, '0');
+        assert.equal(r.macroVariables?.find(v => v.name === 'ANON_B')?.value, '1');
+        assert.equal(r.macroVariables?.find(v => v.name === 'ANON_C')?.value, '2');
+    });
+
+    test('16進の値も加算して10進で表示する (v2.18.0)', async () => {
+        const r = await analyzeOrThrow(`
+enum Tag { T_X = 0x10, T_Y };
+
+void work(void) {
+    int a = T_X;
+    int b = T_Y;
+}
+`, 'void work(');
+        assert.equal(r.macroVariables?.find(v => v.name === 'T_X')?.value, '0x10', '明示値は記述のまま');
+        assert.equal(r.macroVariables?.find(v => v.name === 'T_Y')?.value, '17');
+    });
+
+    test('数値でない値が指定された場合は式のまま加算量を示す (v2.18.0)', async () => {
+        const r = await analyzeOrThrow(`
+enum Mode { MODE_OFF = BASE_OFFSET, MODE_ON };
+
+void work(void) {
+    int a = MODE_OFF;
+    int b = MODE_ON;
+}
+`, 'void work(');
+        assert.equal(r.macroVariables?.find(v => v.name === 'MODE_OFF')?.value, 'BASE_OFFSET');
+        assert.equal(r.macroVariables?.find(v => v.name === 'MODE_ON')?.value, 'BASE_OFFSET + 1');
+    });
+
+    test('typedef enum の列挙子も収集する (v2.18.0)', async () => {
+        const r = await analyzeOrThrow(`
+typedef enum { STATE_IDLE = 5, STATE_RUN } State;
+
+void work(void) {
+    int a = STATE_RUN;
+}
+`, 'void work(');
+        assert.equal(r.macroVariables?.find(v => v.name === 'STATE_RUN')?.value, '6');
+    });
+
+    test('小文字の列挙子もマクロ変数として扱う (v2.18.0)', async () => {
+        // 定義が見つかっているため、大文字かどうかによらず分類される
+        const r = await analyzeOrThrow(`
+enum Color { red = 3 };
+
+void work(void) {
+    int a = red;
+}
+`, 'void work(', false);
+        const v = r.macroVariables?.find(x => x.name === 'red');
+        assert.ok(v, `マクロ変数に red が含まれること: ${names(r.macroVariables || [])}`);
+        assert.equal(v.value, '3');
+    });
+
+    test('列挙子の定義位置を記録する (v2.18.0)', async () => {
+        const r = await analyzeOrThrow(`
+enum Color {
+    RED = 1
+};
+
+void work(void) {
+    int a = RED;
+}
+`, 'void work(');
+        const v = r.macroVariables?.find(x => x.name === 'RED');
+        assert.ok(v?.definition, '定義位置が記録されること');
+        assert.equal(v.definition.line, 2, '列挙子 RED の行を指すこと');
+    });
+
+    test('同名の #define がある場合はマクロ定義を優先する (v2.18.0)', async () => {
+        // プリプロセッサが先に展開するため #define が勝つ
+        const r = await analyzeOrThrow(`
+#define DUP 100
+enum Dup { DUP = 1 };
+
+void work(void) {
+    int a = DUP;
+}
+`, 'void work(');
+        const v = r.macroVariables?.find(x => x.name === 'DUP');
+        assert.equal(v?.type, 'macro');
+        assert.equal(v?.value, '100');
+    });
+
+    test('関数内で定義された enum は収集対象外とする (v2.18.0)', async () => {
+        const r = await analyzeOrThrow(`
+void work(void) {
+    enum Local { LOCAL_ONLY = 9 };
+    int a = LOCAL_ONLY;
+}
+`, 'void work(');
+        const v = r.macroVariables?.find(x => x.name === 'LOCAL_ONLY');
+        assert.equal(v?.type, '(推定)', 'ローカルな enum は定義として使わない');
+    });
+
+    test('#ifdef の内側の enum も収集する (v2.18.0)', async () => {
+        const r = await analyzeOrThrow(`
+#ifdef USE_COLOR
+enum Color { RED = 7 };
+#endif
+
+void work(void) {
+    int a = RED;
+}
+`, 'void work(');
+        assert.equal(r.macroVariables?.find(x => x.name === 'RED')?.value, '7');
+    });
+});
