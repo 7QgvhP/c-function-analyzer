@@ -140,6 +140,57 @@ describe('parseWithModifierMacroRepair: 修飾子マクロ付き宣言', () => {
     });
 });
 
+describe('parseWithModifierMacroRepair: 型名へ吸収されたマクロ', () => {
+    // VOLATILE unsigned long x; はエラーにならず sized_type_specifier へ吸収される
+    const CASES: { source: string; expected: string; label: string }[] = [
+        { label: 'unsigned long', source: 'VOLATILE unsigned long status;', expected: 'unsigned long' },
+        { label: 'unsigned', source: 'VOLATILE unsigned counter;', expected: 'unsigned' },
+        { label: 'signed short', source: 'GLOBAL signed short delta;', expected: 'signed short' },
+        { label: 'long long', source: 'GLOBAL long long total;', expected: 'long long' }
+    ];
+
+    for (const c of CASES) {
+        test(`${c.label}: ${c.source} の型は ${c.expected}`, async () => {
+            const parser = await getParser();
+            assert.equal(firstDeclaredType(parser, c.source), c.expected);
+        });
+    }
+
+    test('パースエラーがなくても修復する', async () => {
+        const parser = await getParser();
+        const source = 'VOLATILE unsigned long status;';
+        // 元のソースはエラーなくパースされるため、エラー数では判定できない
+        assert.equal(parser.parse(source).rootNode.hasError(), false, '前提: エラーは出ていない');
+        assert.equal(firstDeclaredType(parser, source), 'unsigned long');
+    });
+
+    test('構造体メンバでも修復する', async () => {
+        const parser = await getParser();
+        const source = 'struct S { VOLATILE unsigned long status; };';
+        const tree = parseWithModifierMacroRepair(parser, source);
+
+        const types: string[] = [];
+        const visit = (node: Parser.SyntaxNode): void => {
+            if (node.type === 'field_declaration') {
+                const typeNode = node.childForFieldName('type') || node.child(0);
+                types.push(typeNode ? typeNode.text.trim() : '');
+            }
+            for (let i = 0; i < node.childCount; i++) {
+                visit(node.child(i)!);
+            }
+        };
+        visit(tree.rootNode);
+
+        assert.deepEqual(types, ['unsigned long']);
+    });
+
+    test('正常な sized_type_specifier は変更しない', async () => {
+        const parser = await getParser();
+        assert.equal(firstDeclaredType(parser, 'unsigned long total;'), 'unsigned long');
+        assert.equal(firstDeclaredType(parser, 'unsigned char raw;'), 'unsigned char');
+    });
+});
+
 describe('parseWithModifierMacroRepair: 修復対象外', () => {
     /** 修復してはならないコード（型名がそのまま残ること） */
     const UNTOUCHED: { source: string; expected: string; label: string }[] = [

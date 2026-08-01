@@ -142,6 +142,14 @@ interface DeclaredVar {
     arrayDimensions: string[];
     /** 宣言されている位置 */
     definition: DefinitionLocation;
+    /**
+     * 型がその場で定義された無名の構造体・共用体である場合のメンバ一覧です。
+     *
+     * `struct { int inner; } nest;` のようなメンバはタグ名を持たないため、
+     * 型名から構造体定義を引くことができません。メンバ一覧を直接持たせることで
+     * `g.nest.inner` のような多段のアクセスパスを解決できるようにします。
+     */
+    inlineMembers?: StructMembers;
 }
 
 /** 関数の宣言・定義の情報 */
@@ -305,6 +313,21 @@ function forEachFileScopeNode(
         }
         callback(child);
     });
+}
+
+/**
+ * 2つのノードが同一かを判定します。
+ *
+ * web-tree-sitter は `child()` や `childForFieldName()` を呼ぶたびに新しい
+ * ラッパーオブジェクトを返すため、`===` による比較は同じノードでも false になります。
+ * ノードの識別には `id` を使う必要があります。
+ *
+ * @param a 比較するノード
+ * @param b 比較するノード
+ * @returns 同一のノードであれば true
+ */
+function isSameNode(a: Parser.SyntaxNode | null, b: Parser.SyntaxNode | null): boolean {
+    return a !== null && b !== null && a.id === b.id;
 }
 
 /**
@@ -478,7 +501,7 @@ function resolveAccessPath(
     // 区切り文字（. と ->）を保持したまま分割する
     const parts = accessPath.split(/(\.|->)/);
 
-    let current: { type: string; arrayDimensions: string[] } = rootVar;
+    let current: { type: string; arrayDimensions: string[]; inlineMembers?: StructMembers } = rootVar;
     let name = substituteSubscripts(parts[0], current.arrayDimensions);
     let lastSegment = parts[0];
     let resolved = true;
@@ -493,7 +516,11 @@ function resolveAccessPath(
 
         // 添字を除いた部分がメンバ名
         const memberName = segment.replace(/\[[^\]]*\]/g, '');
-        const members = resolved ? findStructMembers(current.type, types) : undefined;
+        // その場で定義された無名の構造体・共用体は型名から引けないため、
+        // メンバが直接持っている一覧を優先して使う
+        const members = resolved
+            ? (current.inlineMembers || findStructMembers(current.type, types))
+            : undefined;
         const member = members ? members.get(memberName) : undefined;
 
         if (member) {
@@ -559,7 +586,7 @@ function collectDeclaredVars(
 
     for (let i = 0; i < declNode.childCount; i++) {
         const child = declNode.child(i)!;
-        if (child === typeNode || child.type === ',' || child.type === ';') {
+        if (isSameNode(child, typeNode) || child.type === ',' || child.type === ';') {
             continue;
         }
 
@@ -655,7 +682,7 @@ function collectFileScopeFunctions(
             for (let i = 0; i < node.childCount; i++) {
                 const child = node.child(i)!;
                 // 型指定子・区切り文字、および初期化子付き宣言（＝変数）は対象外
-                if (child === typeNode || child.type === ',' || child.type === ';' || child.type === 'init_declarator') {
+                if (isSameNode(child, typeNode) || child.type === ',' || child.type === ';' || child.type === 'init_declarator') {
                     continue;
                 }
                 const info = resolveDeclarator(child, origin);
@@ -763,7 +790,38 @@ function collectMacros(
 }
 
 /**
+ * `field_declaration` が宣言子（メンバ名）を持つかを判定します。
+ *
+ * `union { int a; };` のような無名メンバは型指定子だけで構成され、宣言子を持ちません。
+ *
+ * @param fieldNode field_declaration ノード
+ * @param typeNode 型指定子ノード
+ * @returns 宣言子を持つ場合は true
+ */
+function hasFieldDeclarator(
+    fieldNode: Parser.SyntaxNode,
+    typeNode: Parser.SyntaxNode | null
+): boolean {
+    for (let i = 0; i < fieldNode.childCount; i++) {
+        const child = fieldNode.child(i)!;
+        if (!isSameNode(child, typeNode) && child.type !== ',' && child.type !== ';') {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
  * 構造体・共用体のメンバ一覧を収集します。
+ *
+ * 次の記法に対応します。
+ *
+ * | 記法 | 扱い |
+ * |---|---|
+ * | `int plain;` | そのまま登録 |
+ * | `#ifdef X` の内側のメンバ | プリプロセッサ条件を透過的に降りて登録 |
+ * | `union { int a; };`（無名メンバ） | 中身のメンバを親へ展開 |
+ * | `struct { int inner; } nest;` | `nest` に中身のメンバ一覧を持たせる |
  *
  * @param bodyNode field_declaration_list ノード
  * @param origin 収集元ファイルの情報（解析対象ファイル自身の場合は省略）
@@ -771,14 +829,63 @@ function collectMacros(
  */
 function collectStructMembers(bodyNode: Parser.SyntaxNode, origin?: SymbolOrigin): StructMembers {
     const members: StructMembers = new Map();
+    collectStructMembersInto(bodyNode, members, origin);
+    return members;
+}
+
+/**
+ * 構造体本体を走査し、メンバを登録先のマップへ追加します。
+ *
+ * @param bodyNode field_declaration_list ノード、またはその内側のプリプロセッサ条件ブロック
+ * @param members 登録先のマップ
+ * @param origin 収集元ファイルの情報（解析対象ファイル自身の場合は省略）
+ */
+function collectStructMembersInto(
+    bodyNode: Parser.SyntaxNode,
+    members: StructMembers,
+    origin?: SymbolOrigin
+): void {
     for (let i = 0; i < bodyNode.childCount; i++) {
         const child = bodyNode.child(i)!;
-        if (child.type === 'field_declaration') {
-            // field_declaration は declaration と同じ構造（type + declarator）のため共通処理を使う
-            collectDeclaredVars(child, members, origin);
+
+        // #ifdef / #if などの内側にもメンバが書かれるため、透過的に降りる
+        if (PREPROC_BLOCK_TYPES.has(child.type)) {
+            collectStructMembersInto(child, members, origin);
+            continue;
         }
+        if (child.type !== 'field_declaration') {
+            continue;
+        }
+
+        // その場で定義された構造体・共用体は、中身のメンバも解決できるようにする
+        // （型指定子の取得方法は collectDeclaredVars と揃える）
+        const typeNode = child.childForFieldName('type') || child.child(0);
+        const nestedBody =
+            typeNode && (typeNode.type === 'struct_specifier' || typeNode.type === 'union_specifier')
+                ? typeNode.childForFieldName('body')
+                : null;
+
+        if (nestedBody && !hasFieldDeclarator(child, typeNode)) {
+            // union { int a; }; のような無名メンバは、中身が親のメンバそのものになる
+            collectStructMembersInto(nestedBody, members, origin);
+            continue;
+        }
+
+        // field_declaration は declaration と同じ構造（type + declarator）のため共通処理を使う
+        const before = new Set(members.keys());
+        collectDeclaredVars(child, members, origin);
+
+        if (!nestedBody) {
+            continue;
+        }
+        // struct { int inner; } nest; のように名前付きの場合は、その名前に中身を持たせる
+        const nestedMembers = collectStructMembers(nestedBody, origin);
+        members.forEach((member, name) => {
+            if (!before.has(name)) {
+                member.inlineMembers = nestedMembers;
+            }
+        });
     }
-    return members;
 }
 
 /**

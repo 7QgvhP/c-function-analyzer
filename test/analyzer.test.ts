@@ -1396,3 +1396,127 @@ void work(void) {
         assert.equal(f!.type, 'S16');
     });
 });
+
+describe('フェーズ5: 構造体メンバの収集範囲', () => {
+    test('#ifdef の内側で宣言されたメンバの型を解決する', async () => {
+        const r = await analyzeOrThrow(`
+struct Config {
+#ifdef USE_EXTRA
+    int guarded;
+#endif
+    int plain;
+};
+struct Config g_cfg;
+
+void work(void) {
+    g_cfg.guarded = 1;
+    g_cfg.plain = 2;
+}
+`, 'void work(');
+        assert.equal(findVar(r.outputs, 'g_cfg.guarded')!.type, 'int');
+        assert.equal(findVar(r.outputs, 'g_cfg.plain')!.type, 'int');
+    });
+
+    test('#if / #else の内側で宣言されたメンバの型を解決する', async () => {
+        const r = await analyzeOrThrow(`
+struct Config {
+#if defined(MODE_A)
+    short mode_a;
+#else
+    long mode_b;
+#endif
+};
+struct Config g_cfg;
+
+void work(void) {
+    g_cfg.mode_a = 1;
+    g_cfg.mode_b = 2;
+}
+`, 'void work(');
+        assert.equal(findVar(r.outputs, 'g_cfg.mode_a')!.type, 'short');
+        assert.equal(findVar(r.outputs, 'g_cfg.mode_b')!.type, 'long');
+    });
+
+    test('無名共用体のメンバは親構造体のメンバとして扱う', async () => {
+        const r = await analyzeOrThrow(`
+struct Packet {
+    union {
+        int   as_int;
+        float as_float;
+    };
+    int tag;
+};
+struct Packet g_packet;
+
+void work(void) {
+    g_packet.as_int = 1;
+    g_packet.tag = 2;
+}
+`, 'void work(');
+        assert.equal(findVar(r.outputs, 'g_packet.as_int')!.type, 'int');
+        assert.equal(findVar(r.outputs, 'g_packet.tag')!.type, 'int', '無名メンバの後に続くメンバも収集されること');
+    });
+
+    test('無名構造体を型に持つメンバは中身まで辿れる', async () => {
+        const r = await analyzeOrThrow(`
+struct Outer {
+    struct {
+        unsigned char inner;
+    } nest;
+};
+struct Outer g_outer;
+
+void work(void) {
+    g_outer.nest.inner = 1;
+}
+`, 'void work(');
+        assert.equal(findVar(r.outputs, 'g_outer.nest.inner')!.type, 'unsigned char');
+    });
+
+    test('無名構造体メンバが配列でも中身まで辿れる', async () => {
+        const r = await analyzeOrThrow(`
+struct Outer {
+    struct {
+        int value;
+    } items[4];
+};
+struct Outer g_outer;
+
+void work(void) {
+    g_outer.items[0].value = 1;
+}
+`, 'void work(');
+        assert.equal(findVar(r.outputs, 'g_outer.items[4].value')!.type, 'int');
+    });
+
+    test('修飾子マクロ付きのメンバの型を解決する', async () => {
+        const r = await analyzeOrThrow(`
+#define VOLATILE volatile
+
+struct Registers {
+    VOLATILE unsigned long status;
+};
+struct Registers g_regs;
+
+void work(void) {
+    g_regs.status = 1;
+}
+`, 'void work(');
+        assert.equal(findVar(r.outputs, 'g_regs.status')!.type, 'unsigned long');
+    });
+
+    test('ビットフィールドのメンバの型を解決する', async () => {
+        const r = await analyzeOrThrow(`
+struct Flags {
+    unsigned int enabled : 1;
+    unsigned int level   : 3;
+};
+struct Flags g_flags;
+
+void work(void) {
+    g_flags.enabled = 1;
+}
+`, 'void work(');
+        assert.equal(findVar(r.outputs, 'g_flags.enabled')!.type, 'unsigned int');
+    });
+});

@@ -3,7 +3,7 @@
  *
  * このファイルは src/sensor_main.c から参照されます。
  * src/ と include/ が別ディレクトリのため、この1段目だけは
- * includePaths 設定（["include"]）が必要です。
+ * インクルード元からの相対パスでは解決できず、ファイル名検索で解決されます。
  */
 #ifndef APP_CONFIG_H
 #define APP_CONFIG_H

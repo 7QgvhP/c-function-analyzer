@@ -21,7 +21,7 @@
 import Parser = require('web-tree-sitter');
 
 /** 修飾子マクロの候補を探す対象のノード種別 */
-const TARGET_NODE_TYPES = new Set(['declaration', 'function_definition']);
+const TARGET_NODE_TYPES = new Set(['declaration', 'function_definition', 'field_declaration']);
 
 /** 先頭のマクロとみなしうるノード種別 */
 const LEADING_TYPE_NODE_TYPES = new Set(['type_identifier', 'identifier']);
@@ -38,40 +38,109 @@ interface SourceSpan {
 /**
  * ソースをパースし、修飾子マクロによるパース崩れがあれば修復したASTを返します。
  *
- * 修復後のASTはエラー数が減った場合のみ採用します。誤検出により状態が悪化することは
- * ありません。修復が不要・不可能な場合は通常のパース結果をそのまま返します。
+ * 修復は次の2段階で行います。誤検出により状態が悪化することはありません。
+ *
+ * | 段階 | 対象 | 採用条件 |
+ * |---|---|---|
+ * | 1 | `VOLATILE unsigned long x;` のように型名へ吸収されたマクロ | エラーが増えないこと |
+ * | 2 | `GLOBAL BYTE hoge;` のようにパースが崩れたマクロ | エラーが実際に減ること |
+ *
+ * 段階1は構文的に不正な形（`unsigned` の前に素の識別子が来る）のみを対象とするため、
+ * パースエラーが出ていなくても安全に除去できます。段階2は推定を含むため、
+ * エラーが減った場合のみ採用します。
  *
  * @param parser 言語設定済みのパーサー
  * @param source 解析対象のCソースコード
  * @returns AST（必要に応じて修復済み）
  */
 export function parseWithModifierMacroRepair(parser: Parser, source: string): Parser.Tree {
-    const tree = parser.parse(source);
-    if (!tree.rootNode.hasError()) {
-        return tree;
+    let current: RepairState = { tree: parser.parse(source), source };
+
+    // 段階1: 型名へ吸収されたマクロ（エラーにならないため、エラーの有無によらず判定する）
+    current = applyRepair(parser, current, collectAbsorbedMacroSpans, true);
+
+    // 段階2: パースが崩れたマクロ
+    if (current.tree.rootNode.hasError()) {
+        current = applyRepair(parser, current, collectModifierMacroSpans, false);
     }
 
-    const spans = collectModifierMacroSpans(tree.rootNode);
+    return current.tree;
+}
+
+/** 修復の途中経過（ソースとその解析結果） */
+interface RepairState {
+    tree: Parser.Tree;
+    source: string;
+}
+
+/**
+ * 指定した収集方法で範囲を空白化し、改善した場合のみ結果を採用します。
+ *
+ * @param parser 言語設定済みのパーサー
+ * @param state 現在のソースとAST
+ * @param collect 空白化する範囲の収集方法
+ * @param allowEqualErrors エラー数が同じでも採用するか（確実な修復の場合に true）
+ * @returns 採用後のソースとAST（採用しない場合は入力のまま）
+ */
+function applyRepair(
+    parser: Parser,
+    state: RepairState,
+    collect: (rootNode: Parser.SyntaxNode) => SourceSpan[],
+    allowEqualErrors: boolean
+): RepairState {
+    const spans = collect(state.tree.rootNode);
     if (spans.length === 0) {
-        return tree;
+        return state;
     }
 
+    const repairedSource = blankSpans(state.source, spans);
     let repaired: Parser.Tree;
     try {
-        repaired = parser.parse(blankSpans(source, spans));
+        repaired = parser.parse(repairedSource);
     } catch {
-        // 再パースに失敗した場合は元のASTで解析を継続する
-        return tree;
+        // 再パースに失敗した場合は現在のASTで解析を継続する
+        return state;
     }
 
-    // 誤検出で状態を悪化させないよう、エラーが実際に減った場合のみ採用する
-    if (countErrors(repaired.rootNode) < countErrors(tree.rootNode)) {
-        deleteTree(tree);
-        return repaired;
+    const before = countErrors(state.tree.rootNode);
+    const after = countErrors(repaired.rootNode);
+    const improved = allowEqualErrors ? after <= before : after < before;
+
+    if (improved) {
+        deleteTree(state.tree);
+        return { tree: repaired, source: repairedSource };
     }
 
     deleteTree(repaired);
-    return tree;
+    return state;
+}
+
+/**
+ * 型名へ吸収された修飾子マクロの範囲を収集します。
+ *
+ * `VOLATILE unsigned long x;` は `sized_type_specifier` として**エラーなく**パースされ、
+ * 型名が `VOLATILE unsigned long` になってしまいます。C言語では `unsigned` などの前に
+ * 素の識別子が来ることはないため、この形は必ず修飾子マクロです。
+ *
+ * @param rootNode ASTのルートノード
+ * @returns 空白化すべき範囲の一覧
+ */
+function collectAbsorbedMacroSpans(rootNode: Parser.SyntaxNode): SourceSpan[] {
+    const spans: SourceSpan[] = [];
+
+    walk(rootNode, node => {
+        if (spans.length >= MAX_REPAIR_SPANS || node.type !== 'sized_type_specifier') {
+            return;
+        }
+        const first = node.child(0);
+        // 素の識別子で始まり、後ろに unsigned などが続く場合のみが対象
+        if (!first || first.type !== 'type_identifier' || node.childCount < 2) {
+            return;
+        }
+        spans.push({ startIndex: first.startIndex, endIndex: first.endIndex });
+    });
+
+    return spans;
 }
 
 /**
