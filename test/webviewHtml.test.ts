@@ -283,7 +283,7 @@ describe('renderAnalysisHtml: 定義位置とジャンプボタン', () => {
 
     test('定義位置がない項目には「定義へ」ボタンを出力しない', () => {
         const html = renderAnalysisHtml(makeResult({
-            inputs: [{ name: 'unknown_global', type: 'global (推定)', details: '' }]
+            inputs: [{ name: 'unknown_global', type: '(推定)', details: '' }]
         }), 'N');
         // Webview 内スクリプトにもクラス名・属性名が現れるため、属性の記述形式で判定する
         assert.ok(!html.includes('class="var-def-button"'), 'ボタンが出力されないこと');
@@ -533,7 +533,7 @@ describe('renderAnalysisHtml: セクション構成', () => {
         assert.ok(!without.includes(macroFnHeading), '該当がなければマクロ関数セクションは出力されないこと');
 
         const withMacros = renderAnalysisHtml(makeResult({
-            macroVariables: [{ name: 'MAX_LIMIT', type: 'macro (推定)', details: '' }],
+            macroVariables: [{ name: 'MAX_LIMIT', type: '(推定)', details: '' }],
             macroFunctions: [{ name: 'LOG_MSG' }]
         }), 'N');
         assert.ok(withMacros.includes(macroVarHeading), 'マクロ変数セクションが出力されること');

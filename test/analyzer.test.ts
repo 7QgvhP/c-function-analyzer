@@ -403,7 +403,7 @@ float scale(float v) {
         assert.equal(g.type, 'float');
     });
 
-    test('ファイル内に定義がないグローバル変数は global (推定) とする (v1.13.0)', async () => {
+    test('ファイル内に定義がないグローバル変数は (推定) とする (v1.13.0)', async () => {
         const r = await analyzeOrThrow(`
 void publish(void) {
     external_flag = 1;
@@ -411,7 +411,7 @@ void publish(void) {
 `, 'void publish(');
         const g = findVar(r.outputs, 'external_flag');
         assert.ok(g, '出力に external_flag が含まれること');
-        assert.equal(g.type, 'global (推定)');
+        assert.equal(g.type, '(推定)');
     });
 
     test('インライン構造体定義を含むグローバル変数の型名から波括弧を除去する (v1.13.3)', async () => {
@@ -633,11 +633,11 @@ void work(void) {
         assert.equal(fetch.type, 'char*', 'ポインタ戻り値の型が取得できること');
         assert.ok(fetch.definition, '関数として定義位置が記録されること');
 
-        // 関数ポインタ変数は関数宣言ではないため、戻り値の型を持たない
-        assert.equal(r.calledFunctions.find(f => f.name === 'fp')?.type, undefined);
+        // 関数ポインタ変数は関数宣言ではないため、戻り値の型を特定できない
+        assert.equal(r.calledFunctions.find(f => f.name === 'fp')?.type, '(推定)');
     });
 
-    test('宣言が見つからない呼び出し関数には型を持たせない (v2.14.0)', async () => {
+    test('宣言が見つからない呼び出し関数は (推定) と表示する (v2.17.0)', async () => {
         const r = await analyzeOrThrow(`
 void work(void) {
     printf("hello");
@@ -645,7 +645,7 @@ void work(void) {
 `, 'void work(');
         const fn = r.calledFunctions.find(f => f.name === 'printf');
         assert.ok(fn, '呼び出し関数に printf が含まれること');
-        assert.equal(fn.type, undefined, '戻り値の型は特定できないこと');
+        assert.equal(fn.type, '(推定)', '戻り値の型は特定できないこと');
     });
 
     test('マクロ関数は型を macro とし定義値を持たせる (v2.14.0)', async () => {
@@ -785,7 +785,7 @@ int check(int v) {
     return v > unknown_global;
 }
 `, 'int check(');
-        assert.equal(findVar(r.inputs, 'unknown_global')?.type, 'global (推定)');
+        assert.equal(findVar(r.inputs, 'unknown_global')?.type, '(推定)');
     });
 
     test('コメントのみの値はマクロ（値なし）として扱う (v2.10.1)', async () => {
@@ -810,7 +810,7 @@ void work(int v) {
 `, 'void work(');
         const g = findVar(r.outputs, 'GLOBAL_COUNTER');
         assert.ok(g, `出力に GLOBAL_COUNTER が含まれること: ${names(r.outputs)}`);
-        assert.equal(g.type, 'int', 'macro (推定) ではなく宣言された型になること');
+        assert.equal(g.type, 'int', '(推定) ではなく宣言された型になること');
         assert.ok(
             !names(r.macroVariables ?? []).includes('GLOBAL_COUNTER'),
             'マクロ変数には含まれないこと'
@@ -843,7 +843,7 @@ void work(int v) {
 `, 'void work(');
         const m = findVar(r.macroVariables ?? [], 'UNKNOWN_LIMIT');
         assert.ok(m, `マクロ変数に UNKNOWN_LIMIT が含まれること: ${names(r.macroVariables ?? [])}`);
-        assert.equal(m.type, 'macro (推定)');
+        assert.equal(m.type, '(推定)');
     });
 
     test('マクロ定義は変数宣言より優先する (v2.11.0)', async () => {
@@ -1207,8 +1207,8 @@ void work(void) {
         assert.equal(findVar(r.outputs, 'g_f.g')?.type, 'float');
     });
 
-    test('実体のない typedef では根元の型を維持する (v2.12.1)', async () => {
-        // 循環する typedef でも停止し、解決できない場合は根元の型を表示する
+    test('実体のない typedef では推定表示にする (v2.17.0)', async () => {
+        // 循環する typedef でも停止し、解決できない場合は (推定) を表示する
         const r = await analyzeOrThrow(`
 typedef struct TagG CycleA;
 typedef CycleA CycleB;
@@ -1218,7 +1218,8 @@ void work(void) {
     g_g.unknown = 7;
 }
 `, 'void work(');
-        assert.equal(findVar(r.outputs, 'g_g.unknown')?.type, 'CycleB');
+        assert.equal(findVar(r.outputs, 'g_g.unknown')?.type, '(推定)');
+        assert.equal(findVar(r.outputs, 'g_g.unknown')?.definition, undefined, '定義位置は表示しないこと');
     });
 
     test('インクルードファイル内で分けて typedef された構造体も解決する (v2.12.1)', async () => {
@@ -1234,7 +1235,7 @@ void work(void) {
         assert.equal(findVar(r.outputs, 'g_h.h')?.type, 'short');
     });
 
-    test('構造体定義が見つからない場合は根元の型を維持する', async () => {
+    test('構造体定義が見つからない場合は推定表示にする (v2.17.0)', async () => {
         const r = await analyzeOrThrow(`
 extern struct Unknown ext_data;
 
@@ -1244,10 +1245,11 @@ void setup(void) {
 `, 'void setup(');
         const v = findVar(r.outputs, 'ext_data.field');
         assert.ok(v, '出力に ext_data.field が含まれること');
-        assert.equal(v.type, 'struct Unknown', '解決できない場合は根元の型を表示すること');
+        assert.equal(v.type, '(推定)', '解決できない場合は推定表示にすること');
+        assert.equal(v.definition, undefined, '定義位置は表示しないこと');
     });
 
-    test('存在しないメンバ名の場合は根元の型を維持する', async () => {
+    test('存在しないメンバ名の場合は推定表示にする (v2.17.0)', async () => {
         const r = await analyzeOrThrow(`
 struct Config { int mode; };
 struct Config cfg;
@@ -1258,7 +1260,8 @@ void setup(void) {
 `, 'void setup(');
         const v = findVar(r.outputs, 'cfg.unknown_field');
         assert.ok(v, '出力に cfg.unknown_field が含まれること');
-        assert.equal(v.type, 'struct Config', '解決できない場合は根元の型を表示すること');
+        assert.equal(v.type, '(推定)', '解決できない場合は推定表示にすること');
+        assert.equal(v.definition, undefined, '定義位置は表示しないこと');
     });
 
     test('関数内で定義された構造体は収集対象外とする', async () => {
@@ -1270,8 +1273,8 @@ void setup(void) {
     cfg.only_local = 1;
 }
 `, 'void setup(');
-        // 関数ボディ内のローカルな型定義は使わないため、根元の型のままとなる
-        assert.equal(findVar(r.outputs, 'cfg.only_local')?.type, 'struct Config');
+        // 関数ボディ内のローカルな型定義は使わないため、メンバを解決できない
+        assert.equal(findVar(r.outputs, 'cfg.only_local')?.type, '(推定)');
     });
 });
 
@@ -1518,5 +1521,119 @@ void work(void) {
 }
 `, 'void work(');
         assert.equal(findVar(r.outputs, 'g_flags.enabled')!.type, 'unsigned int');
+    });
+});
+
+describe('フェーズ5: 定義が見つからない場合の型表示', () => {
+    test('変数・関数・マクロで同じ表記になる (v2.17.0)', async () => {
+        const r = await analyzeOrThrow(`
+void work(void) {
+    unknown_fn();
+    UNKNOWN_MACRO_FN();
+    unknown_global = 1;
+    UNKNOWN_MACRO_VAR = 2;
+}
+`, 'void work(');
+        const types = [
+            r.calledFunctions.find(f => f.name === 'unknown_fn')?.type,
+            r.macroFunctions?.find(f => f.name === 'UNKNOWN_MACRO_FN')?.type,
+            findVar(r.outputs, 'unknown_global')?.type,
+            r.macroVariables?.find(v => v.name === 'UNKNOWN_MACRO_VAR')?.type
+        ];
+        assert.deepEqual(types, ['(推定)', '(推定)', '(推定)', '(推定)']);
+    });
+
+    test('定義が見つかる場合は従来どおり実際の型を表示する (v2.17.0)', async () => {
+        const r = await analyzeOrThrow(`
+#define KNOWN_MACRO 10
+
+extern int known_global;
+void known_fn(void);
+
+void work(void) {
+    known_fn();
+    known_global = KNOWN_MACRO;
+}
+`, 'void work(');
+        assert.equal(r.calledFunctions.find(f => f.name === 'known_fn')!.type, 'void');
+        assert.equal(findVar(r.outputs, 'known_global')!.type, 'int');
+        assert.equal(r.macroVariables?.find(v => v.name === 'KNOWN_MACRO')!.type, 'macro');
+    });
+});
+
+describe('フェーズ5: 構造体メンバの定義位置', () => {
+    test('解決できたメンバは根元の変数ではなくメンバの宣言位置を指す (v2.17.0)', async () => {
+        const r = await analyzeOrThrow(`
+struct Outer {
+    int top;
+};
+struct Outer g_outer;
+
+void work(void) {
+    g_outer.top = 1;
+}
+`, 'void work(');
+        const v = findVar(r.outputs, 'g_outer.top');
+        assert.ok(v?.definition, '定義位置が記録されること');
+        // 1行目が struct Outer {、2行目が int top;（0始まり）
+        assert.equal(v.definition.line, 2, 'メンバ int top; の行を指すこと');
+    });
+
+    test('多段のメンバアクセスでは最終メンバの宣言位置を指す (v2.17.0)', async () => {
+        const r = await analyzeOrThrow(`
+struct Inner {
+    int leaf;
+};
+struct Outer {
+    struct Inner nest;
+};
+struct Outer g_outer;
+
+void work(void) {
+    g_outer.nest.leaf = 1;
+}
+`, 'void work(');
+        const v = findVar(r.outputs, 'g_outer.nest.leaf');
+        assert.ok(v?.definition, '定義位置が記録されること');
+        assert.equal(v.definition.line, 2, 'メンバ int leaf; の行を指すこと');
+    });
+
+    test('メンバを伴わない変数は従来どおり自身の宣言位置を指す (v2.17.0)', async () => {
+        const r = await analyzeOrThrow(`
+extern int g_plain;
+
+void work(void) {
+    g_plain = 1;
+}
+`, 'void work(');
+        const v = findVar(r.outputs, 'g_plain');
+        assert.ok(v?.definition, '定義位置が記録されること');
+        assert.equal(v.definition.line, 1);
+    });
+
+    test('ポインタ引数のメンバもメンバの宣言位置を指す (v2.17.0)', async () => {
+        const r = await analyzeOrThrow(`
+struct Reading {
+    int measured_at;
+};
+
+void work(struct Reading *reading) {
+    reading->measured_at = 1;
+}
+`, 'void work(');
+        const v = findVar(r.outputs, 'reading->measured_at');
+        assert.ok(v?.definition, '定義位置が記録されること');
+        assert.equal(v.definition.line, 2, 'メンバ int measured_at; の行を指すこと');
+    });
+
+    test('ポインタ引数そのものは引数の宣言位置を指す (v2.17.0)', async () => {
+        const r = await analyzeOrThrow(`
+void work(int *out) {
+    *out = 1;
+}
+`, 'void work(');
+        const v = findVar(r.outputs, 'out');
+        assert.ok(v?.definition, '定義位置が記録されること');
+        assert.equal(v.definition.line, 1, '引数の宣言行を指すこと');
     });
 });
