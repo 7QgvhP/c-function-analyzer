@@ -200,9 +200,32 @@ GLOBAL S16   hal_read(void);  /* 呼び出し関数の戻り値型は S16 */
 
 | 状況 | 判定 |
 |---|---|
+| **型として定義されている** | 変数・関数のいずれにも分類しない（表示しない） |
 | `#define` または `enum` の列挙子が見つかった | **マクロ**（名前の大小によらない） |
 | 変数・関数の宣言が見つかった | **変数・関数**（名前の大小によらない） |
 | どちらも見つからない | 大文字のみの名前ならマクロと推定（`classifyAllUppercaseAsMacros`） |
+
+#### 型名は変数として表示しません
+
+`#define` や `typedef` で定義した型名は、変数・関数の一覧に表示されません。
+
+```c
+#define BYTE unsigned char
+
+a = (BYTE)(hoge + 1);   /* BYTE は型なので表示されない */
+```
+
+キャストの直後が `(` `-` `*` `&` で始まると、tree-sitter はキャストと解釈できません。`(x)(y)` は `x` が変数なら関数呼び出し、`(x)-y` は引き算として**C言語の式として正しい**ためです。収集済みの定義から型名を判別し、変数の一覧に紛れ込まないようにしています。
+
+| 定義の書き方 | 例 |
+|---|---|
+| 型マクロ | `#define BYTE unsigned char` |
+| マクロの連鎖 | `#define BYTE U8` + `#define U8 unsigned char` |
+| ポインタ型 | `#define PBYTE unsigned char *` |
+| 構造体 | `#define FOO_T struct Foo` |
+| `typedef` | `typedef unsigned char BYTE;` |
+
+値を持つマクロ（`#define MAX_LIMIT 100`）と `enum` の列挙子は値であるため、従来どおり表示されます。定義が見つからない型名は型と判断できないため表示されます。
 
 ```c
 extern int GLOBAL_COUNTER;   /* 大文字でも変数として扱われる（型は int） */

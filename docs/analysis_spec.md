@@ -381,6 +381,45 @@ typedef struct ConfigTag Config;   /* typedef の位置に中身がない */
 - 関数ボディ内で定義されたローカルな `enum` は対象外です
 - 同名の `#define` が既に登録されている場合は上書きしません（プリプロセッサが先に展開するため）
 
+### 型として使われている名前の収集 (`collectTypeNames`)
+
+組込みコードでは `#define BYTE unsigned char` のように型をマクロで定義することが多く、これがキャストの解釈に影響します。
+
+```c
+a = (BYTE)hoge;        /* cast_expression として正しく解釈される */
+a = (BYTE)(hoge + 1);  /* call_expression（関数呼び出し）と解釈される */
+a = (BYTE)-hoge;       /* binary_expression（引き算）と解釈される */
+a = (BYTE)*q;          /* binary_expression（掛け算）と解釈される */
+a = (BYTE)&hoge;       /* binary_expression（ビットAND）と解釈される */
+```
+
+```
+a = (BYTE)-hoge;
+  binary_expression
+    parenthesized_expression  |(BYTE)|
+      identifier  |BYTE|        ← 変数参照として現れる
+    -
+    identifier  |hoge|
+```
+
+`(x)-y` は `x` が変数なら引き算として**C言語の式として正しい**ため、`x` が型名かどうかを知らなければ区別できません（いわゆる typedef 問題）。tree-sitter は同じファイル内の `typedef` を記憶しますが、この曖昧さの解消には使われず、`typedef` があっても同じ結果になります。
+
+そのため、収集済みの定義から型名の一覧を作り、分類時に除外します。
+
+| 情報源 | 判定 |
+|---|---|
+| `typeAliases` のキー | `typedef` で付けた別名 |
+| `structs` のキー | 構造体・共用体の登録名 |
+| `macros` の値が型指定子のみ | 型マクロ（`isTypeLikeText`） |
+
+`isTypeLikeText` は、値を空白と `*` で区切り、すべてのトークンが次のいずれかであるかを判定します。
+
+- 型指定子・型修飾子のキーワード（`unsigned` `char` `const` など）
+- `struct` / `union` / `enum` の直後のタグ名
+- 別の既知の型名（`#define BYTE U8` のような連鎖を辿ります。循環は訪問済み集合で停止します）
+
+除外は「**変数として宣言されていない場合のみ**」適用します。宣言が見つかる名前は実在する変数のため、そちらを優先します。値を持つマクロ（`#define MAX_LIMIT 100`）と `enum` の列挙子は値であるため対象外です。
+
 ### インクルードファイルの探索 (`collectIncludedSymbols`)
 
 `#include "..."` を再帰的に辿り、ヘッダ内で宣言された変数・関数・マクロを収集します。これにより、従来 `(推定)` と表示されていたグローバル変数が実際の型で表示され、定義位置へのジャンプも可能になります。

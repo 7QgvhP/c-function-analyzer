@@ -1339,6 +1339,120 @@ function shouldClassifyAsMacro(
     return classifyAllUppercaseAsMacros && isAllUppercase(name);
 }
 
+/** 型指定子・型修飾子として現れるC言語のキーワード */
+const TYPE_KEYWORDS = new Set([
+    'void', 'char', 'short', 'int', 'long', 'float', 'double',
+    'signed', 'unsigned', '_Bool', 'bool',
+    'const', 'volatile', 'restrict', 'register',
+    'struct', 'union', 'enum'
+]);
+
+/** `struct` などの直後に来るタグ名を受け付けるためのキーワード */
+const TAG_KEYWORDS = new Set(['struct', 'union', 'enum']);
+
+/**
+ * テキストが型指定子だけで構成されているかを判定します。
+ *
+ * `unsigned char`、`struct Config *`、他の型マクロの名前などを型とみなします。
+ * 数値や演算子を含むもの（`(10)`、`BASE + 1`）は型ではありません。
+ *
+ * @param text 判定対象のテキスト
+ * @param symbols 収集済みのシンボル情報
+ * @param visited 参照済みの名前（マクロが循環する場合の停止用）
+ * @returns 型指定子だけで構成されていれば true
+ */
+function isTypeLikeText(text: string, symbols: FileScopeSymbols, visited: Set<string>): boolean {
+    // ポインタのアスタリスクは区切りとして扱う
+    const tokens = text.replace(/\*/g, ' ').trim().split(/\s+/).filter(t => t.length > 0);
+    if (tokens.length === 0) {
+        return false;
+    }
+
+    let expectTag = false;
+    for (const token of tokens) {
+        if (expectTag) {
+            // struct / union / enum の直後は任意のタグ名を受け付ける
+            if (!/^[A-Za-z_]\w*$/.test(token)) {
+                return false;
+            }
+            expectTag = false;
+            continue;
+        }
+        if (TAG_KEYWORDS.has(token)) {
+            expectTag = true;
+            continue;
+        }
+        if (TYPE_KEYWORDS.has(token)) {
+            continue;
+        }
+        if (!isKnownTypeName(token, symbols, visited)) {
+            return false;
+        }
+    }
+
+    // タグ名を待ったまま終わった場合（`struct` だけ）は型として扱わない
+    return !expectTag;
+}
+
+/**
+ * 名前が既知の型名かを判定します。
+ *
+ * `typedef` の別名、構造体・共用体の登録名、および型を表すマクロが対象です。
+ * 型マクロが別の型マクロを参照している場合（`#define U8 BYTE`）も辿ります。
+ *
+ * @param name 判定対象の名前
+ * @param symbols 収集済みのシンボル情報
+ * @param visited 参照済みの名前（マクロが循環する場合の停止用）
+ * @returns 型名であれば true
+ */
+function isKnownTypeName(name: string, symbols: FileScopeSymbols, visited: Set<string>): boolean {
+    if (visited.has(name)) {
+        return false;
+    }
+    visited.add(name);
+
+    if (symbols.typeAliases.has(name) || symbols.structs.has(name)) {
+        return true;
+    }
+
+    const macro = symbols.macros.get(name);
+    // 列挙子は値であって型ではないため対象外
+    if (macro && macro.kind === 'macro' && macro.value) {
+        return isTypeLikeText(macro.value, symbols, visited);
+    }
+    return false;
+}
+
+/**
+ * 型として使われている名前の一覧を収集します。
+ *
+ * 組込みコードでは `#define BYTE unsigned char` のように型をマクロで定義することが多く、
+ * `a = (BYTE)(hoge + 1);` のようなキャストは tree-sitter が**キャストと解釈できません**
+ * （`(x)(y)` は `x` が変数なら関数呼び出し、`(x)-y` は引き算として正しいC言語の式であり、
+ * `x` が型名かどうかを知らなければ区別できないため）。その結果 `BYTE` が変数参照として
+ * AST に現れ、マクロ変数として誤検出されます。
+ *
+ * 収集済みの定義から型名を洗い出し、分類時に除外することで誤検出を防ぎます。
+ *
+ * @param symbols 収集済みのシンボル情報
+ * @returns 型として使われている名前の集合
+ */
+function collectTypeNames(symbols: FileScopeSymbols): Set<string> {
+    const typeNames = new Set<string>(symbols.typeAliases.keys());
+
+    symbols.macros.forEach((macro, name) => {
+        if (macro.kind !== 'macro' || !macro.value) {
+            return;
+        }
+        // 自分自身を参照して無限に辿らないよう、起点の名前を訪問済みにしておく
+        if (isTypeLikeText(macro.value, symbols, new Set([name]))) {
+            typeNames.add(name);
+        }
+    });
+
+    return typeNames;
+}
+
 /**
  * マクロ・列挙子の型名欄に表示する文字列を返します。
  *
@@ -1620,8 +1734,15 @@ function buildResult(
     const macroFunctions: FunctionInfo[] = [];
     const normalCalledFunctions: FunctionInfo[] = [];
 
+    // 型として使われている名前（キャストの誤解釈で変数・関数に紛れ込むため除外する）
+    const typeNames = collectTypeNames(symbols);
+
     // 呼び出し関数を、マクロ関数と通常の関数に振り分ける
     calledFunctions.forEach(func => {
+        // 型名は関数ではない（`(BYTE)(x)` が関数呼び出しと解釈される場合がある）
+        if (!symbols.functions.has(func) && typeNames.has(func)) {
+            return;
+        }
         const info: FunctionInfo = { name: func };
         // 関数定義・プロトタイプ宣言、またはマクロ定義があれば、その位置をジャンプ先として持たせる
         const macro = symbols.macros.get(func);
@@ -1738,6 +1859,12 @@ function buildResult(
             const rootName = getRootName(path);
             const macro = symbols.macros.get(rootName);
             const declared = symbols.vars.get(rootName);
+
+            // 型名は変数ではない（キャストの誤解釈で紛れ込むため除外する）。
+            // 変数として宣言されている場合は、そちらを優先して表示する。
+            if (!declared && typeNames.has(rootName)) {
+                return;
+            }
 
             // 定義が見つかればそれに従い、見つからなければ大文字かどうかで推定する
             if (shouldClassifyAsMacro(rootName, macro !== undefined, declared !== undefined, classifyAllUppercaseAsMacros)) {

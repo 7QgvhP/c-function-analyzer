@@ -1788,3 +1788,143 @@ void work(void) {
         assert.equal(r.macroVariables?.find(x => x.name === 'RED')?.value, '7');
     });
 });
+
+describe('フェーズ5: 型として使われている名前の除外', () => {
+    /** キャストの直後の文字によって tree-sitter がキャストと解釈できない書き方 */
+    const CAST_FORMS = [
+        'a = (BYTE)(hoge + 1);',
+        'a = (BYTE)-hoge;',
+        'a = (BYTE)*q;',
+        'a = (BYTE)&hoge;'
+    ];
+
+    for (const stmt of CAST_FORMS) {
+        test(`#define で定義した型は変数として表示しない: ${stmt} (v2.18.1)`, async () => {
+            const r = await analyzeOrThrow(`
+#define BYTE unsigned char
+
+int hoge;
+int a;
+unsigned char *q;
+
+void work(void) {
+    ${stmt}
+}
+`, 'void work(');
+            const all = [
+                ...names(r.inputs), ...names(r.outputs),
+                ...names(r.macroVariables || []), ...names(r.macroFunctions || []),
+                ...names(r.calledFunctions)
+            ];
+            assert.ok(!all.includes('BYTE'), `BYTE が表示されないこと: ${all}`);
+        });
+    }
+
+    test('typedef で定義した型も除外する (v2.18.1)', async () => {
+        const r = await analyzeOrThrow(`
+typedef unsigned char BYTE;
+
+int hoge;
+int a;
+
+void work(void) {
+    a = (BYTE)-hoge;
+}
+`, 'void work(');
+        const all = [...names(r.inputs), ...names(r.outputs), ...names(r.macroVariables || [])];
+        assert.ok(!all.includes('BYTE'), `BYTE が表示されないこと: ${all}`);
+    });
+
+    test('型マクロが別の型マクロを参照していても除外する (v2.18.1)', async () => {
+        const r = await analyzeOrThrow(`
+#define U8   unsigned char
+#define BYTE U8
+
+int hoge;
+int a;
+
+void work(void) {
+    a = (BYTE)-hoge;
+}
+`, 'void work(');
+        const all = [...names(r.inputs), ...names(r.outputs), ...names(r.macroVariables || [])];
+        assert.ok(!all.includes('BYTE'), `BYTE が表示されないこと: ${all}`);
+    });
+
+    test('ポインタ型のマクロも除外する (v2.18.1)', async () => {
+        const r = await analyzeOrThrow(`
+#define PBYTE unsigned char *
+
+unsigned char *q;
+unsigned char *a;
+
+void work(void) {
+    a = (PBYTE)(q + 1);
+}
+`, 'void work(');
+        const all = [...names(r.inputs), ...names(r.outputs), ...names(r.macroVariables || [])];
+        assert.ok(!all.includes('PBYTE'), `PBYTE が表示されないこと: ${all}`);
+    });
+
+    test('構造体を指す型マクロも除外する (v2.18.1)', async () => {
+        const r = await analyzeOrThrow(`
+struct Foo { int x; };
+#define FOO_T struct Foo
+
+int hoge;
+int a;
+
+void work(void) {
+    a = (FOO_T)-hoge;
+}
+`, 'void work(');
+        const all = [...names(r.inputs), ...names(r.outputs), ...names(r.macroVariables || [])];
+        assert.ok(!all.includes('FOO_T'), `FOO_T が表示されないこと: ${all}`);
+    });
+
+    test('値を持つマクロは従来どおり表示する (v2.18.1)', async () => {
+        const r = await analyzeOrThrow(`
+#define MAX_LIMIT 100
+#define BASE      (10)
+#define OFFSET    hoge + 1
+
+int hoge;
+int a;
+
+void work(void) {
+    a = MAX_LIMIT + BASE + OFFSET;
+}
+`, 'void work(');
+        const macroNames = names(r.macroVariables || []);
+        assert.ok(macroNames.includes('MAX_LIMIT'), `MAX_LIMIT が表示されること: ${macroNames}`);
+        assert.ok(macroNames.includes('BASE'), `BASE が表示されること: ${macroNames}`);
+        assert.ok(macroNames.includes('OFFSET'), `OFFSET が表示されること: ${macroNames}`);
+    });
+
+    test('型名と同名の変数が宣言されている場合は変数として表示する (v2.18.1)', async () => {
+        // 宣言が見つかる場合は、そちらを優先する
+        const r = await analyzeOrThrow(`
+typedef int counter;
+extern int counter_value;
+
+void work(void) {
+    counter_value = 1;
+}
+`, 'void work(');
+        assert.equal(findVar(r.outputs, 'counter_value')?.type, 'int');
+    });
+
+    test('列挙子は型ではないため除外しない (v2.18.1)', async () => {
+        const r = await analyzeOrThrow(`
+enum State { STATE_RUN = 1 };
+
+int a;
+
+void work(void) {
+    a = STATE_RUN;
+}
+`, 'void work(');
+        const macroNames = names(r.macroVariables || []);
+        assert.ok(macroNames.includes('STATE_RUN'), `STATE_RUN が表示されること: ${macroNames}`);
+    });
+});
