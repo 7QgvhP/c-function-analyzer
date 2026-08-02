@@ -612,8 +612,8 @@ void work(void) {
 `, 'void work(');
         assert.equal(
             r.calledFunctions.find(f => f.name === 'helper')?.type,
-            'static void',
-            '修飾子を含めて表示すること'
+            'void',
+            '記憶域クラス（static）は含めず型のみを表示すること'
         );
     });
 
@@ -1926,5 +1926,67 @@ void work(void) {
 `, 'void work(');
         const macroNames = names(r.macroVariables || []);
         assert.ok(macroNames.includes('STATE_RUN'), `STATE_RUN が表示されること: ${macroNames}`);
+    });
+});
+
+describe('フェーズ5: 型名欄の修飾子の扱い', () => {
+    /** 宣言と、期待する型名（記憶域クラス・型修飾子を含まない） */
+    const FUNCTION_CASES: { decl: string; name: string; expected: string }[] = [
+        { decl: 'static void s_fn(void);', name: 's_fn', expected: 'void' },
+        { decl: 'extern int e_fn(void);', name: 'e_fn', expected: 'int' },
+        { decl: 'const char *c_fn(void);', name: 'c_fn', expected: 'char*' },
+        { decl: 'volatile int v_fn(void);', name: 'v_fn', expected: 'int' },
+        { decl: 'static const char *sc_fn(void);', name: 'sc_fn', expected: 'char*' },
+        { decl: 'unsigned char u_fn(void);', name: 'u_fn', expected: 'unsigned char' },
+        { decl: 'struct Foo *st_fn(void);', name: 'st_fn', expected: 'struct Foo*' }
+    ];
+
+    for (const c of FUNCTION_CASES) {
+        test(`呼び出し関数の型は修飾子を含まない: ${c.decl} (v2.19.0)`, async () => {
+            const r = await analyzeOrThrow(`
+${c.decl}
+
+void work(void) {
+    ${c.name}();
+}
+`, 'void work(');
+            assert.equal(r.calledFunctions.find(f => f.name === c.name)?.type, c.expected);
+        });
+    }
+
+    test('解析対象の関数の戻り値も修飾子を含まない (v2.19.0)', async () => {
+        const r = await analyzeOrThrow(`
+static const char *build(void) {
+    return 0;
+}
+`, 'static const char *build(');
+        assert.equal(r.returnType, 'char*');
+        assert.equal(findVar(r.outputs, '戻り値 (return)')?.type, 'char*');
+    });
+
+    test('static void 関数では「戻り値 (return)」を出力に含めない (v2.19.0)', async () => {
+        const r = await analyzeOrThrow(`
+static void quiet(int a) {
+    (void)a;
+}
+`, 'static void quiet(');
+        assert.ok(!names(r.outputs).includes('戻り値 (return)'));
+    });
+
+    test('変数側の表示は従来どおり修飾子を含まない (v2.19.0)', async () => {
+        const r = await analyzeOrThrow(`
+static int   s_var;
+const int    c_var;
+volatile int v_var;
+
+void work(void) {
+    s_var = 1;
+    c_var = 1;
+    v_var = 1;
+}
+`, 'void work(');
+        assert.equal(findVar(r.outputs, 's_var')?.type, 'int');
+        assert.equal(findVar(r.outputs, 'c_var')?.type, 'int');
+        assert.equal(findVar(r.outputs, 'v_var')?.type, 'int');
     });
 });

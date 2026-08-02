@@ -2,6 +2,22 @@
 
 本プロジェクト（C Function Analyzer）のすべての変更は、このファイルに記録されます。
 
+## [2.19.0] - 2026-08-02
+### 変更
+* 呼び出し関数と戻り値の型名欄から、**記憶域クラスと型修飾子を除く**ようにしました。変数側の表示に揃えています。
+
+| 宣言 | 従来 | 今回から | 変数側（従来から変更なし） |
+|---|---|---|---|
+| `static void s_fn(void);` | `static void` | `void` | `static int s_var;` → `int` |
+| `extern int e_fn(void);` | `extern int` | `int` | `extern int e_var;` → `int` |
+| `const char *c_fn(void);` | `const char*` | `char*` | `const int c_var;` → `int` |
+| `volatile int v_fn(void);` | `volatile int` | `int` | `volatile int v_var;` → `int` |
+| `inline int i_fn(void);` | `inline int` | `int` | — |
+
+  * 従来は関数だけが `static` / `const` などを含んでおり、変数と表示が揃っていませんでした。
+  * 解析対象の関数自身の戻り値（`戻り値 (return)` の型）も同じ扱いになります。
+  * `unsigned char`、`struct Foo*` のような型そのものの表記は変わりません。
+
 ## [2.18.1] - 2026-08-02
 ### 修正
 * `#define` や `typedef` で定義した型名が、キャストの書き方によってマクロ変数として誤表示される不具合を修正。

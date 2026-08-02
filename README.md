@@ -57,8 +57,16 @@ extern int shared_counter;
 | `S16` | `hal_read_raw` | 通常の戻り値 |
 | `void` | `app_log` | `void` も明示します |
 | `char*` | `get_buffer` | ポインタ戻り値 |
-| `static void` | `init_all` | 修飾子も含めます |
+| `unsigned char` | `read_byte` | 型そのものの表記はそのまま |
 | `(推定)` | `printf` | 宣言が見つからず型を特定できない場合 |
+
+型名欄には**型だけ**が表示されます。記憶域クラス（`static` `extern` `inline`）と型修飾子（`const` `volatile`）は含みません。変数の型名欄と同じ扱いです。
+
+```c
+static void        s_fn(void);   /* 型名欄は void */
+const char        *c_fn(void);   /* 型名欄は char* */
+static const char *sc_fn(void);  /* 型名欄は char* */
+```
 
 マクロ関数は型名欄が `macro` となり、定義値欄に展開内容が表示されます。
 

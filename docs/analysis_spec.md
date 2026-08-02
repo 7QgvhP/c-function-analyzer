@@ -314,7 +314,17 @@ node.child(0).id === node.child(0).id    // true
 | 関数プロトタイプ宣言 | `void log_message(const char *m);` | `void` |
 | ポインタを返す関数 | `char *fetch(void);` | `char*` |
 
-戻り値の型は宣言子の手前までのテキストから取り出します（`extractReturnType`）。関数シグネチャの解析（フェーズ3）と共通の処理です。
+戻り値の型は型指定子のフィールド（`childForFieldName('type')`）から取り出します（`extractReturnType`）。これにより記憶域クラス（`static` `extern` `inline`）と型修飾子（`const` `volatile`）が除かれ、**変数の型名欄と同じ表記**になります。関数シグネチャの解析（フェーズ3）と共通の処理です。
+
+| 宣言 | 型名欄 |
+|---|---|
+| `static void s_fn(void);` | `void` |
+| `const char *c_fn(void);` | `char*` |
+| `static const char *sc_fn(void);` | `char*` |
+| `unsigned char u_fn(void);` | `unsigned char` |
+| `struct Foo *st_fn(void);` | `struct Foo*` |
+
+型指定子のフィールドが取得できない形では、従来どおり宣言子の手前までのテキストで代用します。
 
 #### 関数ポインタ変数との判別
 
