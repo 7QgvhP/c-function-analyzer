@@ -1075,6 +1075,14 @@ function extractReturnType(
     declaratorNode: Parser.SyntaxNode,
     pointerDepth: number
 ): string {
+    // 型指定子のフィールドを使うことで、記憶域クラス（static / extern / inline）と
+    // 型修飾子（const / volatile）を除いた型だけを取り出す。変数側の表示と揃えるため。
+    const typeNode = node.childForFieldName('type');
+    if (typeNode) {
+        return cleanTypeText(typeNode.text) + '*'.repeat(pointerDepth);
+    }
+
+    // フィールドが取得できない形では、宣言子の手前までのテキストで代用する
     const rawType = node.text
         .substring(0, declaratorNode.startIndex - node.startIndex)
         .trim()
@@ -1522,7 +1530,7 @@ function parseSignature(funcNode: Parser.SyntaxNode): SignatureInfo {
         functionName = declaratorInfo.name;
     }
 
-    // 戻り値の型は declarator の手前までのテキストから取得する（例: "int", "static void", "struct Data*"）
+    // 戻り値の型は型指定子から取得する（例: "int", "void", "struct Data*"）
     if (declaratorNode) {
         returnType = extractReturnType(
             funcNode,
