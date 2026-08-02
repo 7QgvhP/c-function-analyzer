@@ -606,3 +606,61 @@ void work(void) {
         assert.equal(v?.definition?.filePath, undefined, '自ファイル内のため filePath は未設定');
     });
 });
+
+describe('インクルード探索: 型マクロの除外', () => {
+    test('ヘッダで #define された型はキャストで変数として表示されない (v2.18.1)', async () => {
+        const { result } = await analyzeWithIncludes(`#include "types.h"
+
+int hoge;
+int a;
+
+void work(void) {
+    a = (BYTE)(hoge + 1);
+    a = (BYTE)-hoge;
+}
+`, 'void work(', {
+            'types.h': '#define BYTE unsigned char\n'
+        });
+
+        const all = [
+            ...names(result.inputs), ...names(result.outputs),
+            ...names(result.macroVariables || []), ...names(result.calledFunctions)
+        ];
+        assert.ok(!all.includes('BYTE'), `BYTE が表示されないこと: ${all}`);
+    });
+
+    test('ヘッダの typedef もキャストで変数として表示されない (v2.18.1)', async () => {
+        const { result } = await analyzeWithIncludes(`#include "types.h"
+
+int hoge;
+int a;
+
+void work(void) {
+    a = (BYTE)-hoge;
+}
+`, 'void work(', {
+            'types.h': 'typedef unsigned char BYTE;\n'
+        });
+
+        const all = [...names(result.inputs), ...names(result.outputs), ...names(result.macroVariables || [])];
+        assert.ok(!all.includes('BYTE'), `BYTE が表示されないこと: ${all}`);
+    });
+
+    test('型マクロがヘッダを跨いで連鎖していても除外する (v2.18.1)', async () => {
+        const { result } = await analyzeWithIncludes(`#include "app.h"
+
+int hoge;
+int a;
+
+void work(void) {
+    a = (BYTE)-hoge;
+}
+`, 'void work(', {
+            'app.h': '#include "base.h"\n#define BYTE U8\n',
+            'base.h': '#define U8 unsigned char\n'
+        });
+
+        const all = [...names(result.inputs), ...names(result.outputs), ...names(result.macroVariables || [])];
+        assert.ok(!all.includes('BYTE'), `BYTE が表示されないこと: ${all}`);
+    });
+});
