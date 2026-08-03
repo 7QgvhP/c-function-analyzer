@@ -200,7 +200,7 @@ interface FileScopeSymbols {
 }
 
 /** インクルードを辿る深さの上限（循環や過剰な探索を防ぐ） */
-const MAX_INCLUDE_DEPTH = 8;
+export const MAX_INCLUDE_DEPTH = 8;
 
 /**
  * 定義が見つからず、型を特定できなかった場合に型名欄へ表示する文字列です。
@@ -1248,6 +1248,52 @@ function mergeSymbols(into: FileScopeSymbols, from: FileScopeSymbols): void {
 }
 
 /**
+ * AST から `#include "..."` に記述されたパスを取り出します。
+ *
+ * `#ifdef` の内側に書かれたものも拾うため、AST 全体を走査します。
+ * `#include <...>`（システムインクルード）は対象外です。
+ *
+ * @param rootNode ASTのルートノード
+ * @returns インクルードパスの一覧（記述順）
+ */
+export function extractIncludePaths(rootNode: Parser.SyntaxNode): string[] {
+    const includePaths: string[] = [];
+
+    walk(rootNode, (node) => {
+        if (node.type !== 'preproc_include') {
+            return;
+        }
+        const pathNode = node.childForFieldName('path');
+        // system_lib_string（<stdio.h>）はシステムインクルードのため対象外
+        if (!pathNode || pathNode.type !== 'string_literal') {
+            return;
+        }
+        // 前後のダブルクォートを取り除く
+        const raw = pathNode.text;
+        const inner = raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')
+            ? raw.slice(1, -1)
+            : raw;
+        if (inner) {
+            includePaths.push(inner);
+        }
+    });
+
+    return includePaths;
+}
+
+/**
+ * AST から構造体・共用体の定義名を取り出します。
+ *
+ * インクルード探索の診断で「探索されないヘッダにどの型定義があるか」を示すために使います。
+ *
+ * @param rootNode ASTのルートノード
+ * @returns 定義されている型名の一覧（`struct Config`、typedef 名など）
+ */
+export function listStructDefinitionNames(rootNode: Parser.SyntaxNode): string[] {
+    return [...collectStructDefinitions(rootNode).keys()];
+}
+
+/**
  * フェーズ1: `#include "..."` を再帰的に辿り、インクルードファイル内のシンボルを収集します。
  *
  * システムインクルード（`#include <...>`）は対象外です。
@@ -1273,25 +1319,7 @@ function collectIncludedSymbols(
     }
 
     // 先にインクルードパスを集める（#ifdef 内のものも拾うため AST 全体を走査）
-    const includePaths: string[] = [];
-    walk(rootNode, (node) => {
-        if (node.type !== 'preproc_include') {
-            return;
-        }
-        const pathNode = node.childForFieldName('path');
-        // system_lib_string（<stdio.h>）はシステムインクルードのため対象外
-        if (!pathNode || pathNode.type !== 'string_literal') {
-            return;
-        }
-        // 前後のダブルクォートを取り除く
-        const raw = pathNode.text;
-        const inner = raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')
-            ? raw.slice(1, -1)
-            : raw;
-        if (inner) {
-            includePaths.push(inner);
-        }
-    });
+    const includePaths = extractIncludePaths(rootNode);
 
     for (const includePath of includePaths) {
         let resolved: ResolvedInclude | null = null;

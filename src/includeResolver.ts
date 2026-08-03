@@ -184,10 +184,48 @@ export class FileIncludeResolver implements IncludeResolver {
      * @param fromFilePath インクルード元ファイルのURI文字列
      * @returns 見つかったファイルの絶対パスと曖昧さ、見つからなければ null
      */
+    /**
+     * インクルードパスの解決結果を、実在した候補も含めて返します（診断用）。
+     *
+     * @param includePath `#include "..."` に記述されたパス
+     * @param fromFilePath インクルード元ファイルのURI文字列
+     * @returns 採用されたファイルの絶対パスと、実在した候補すべて
+     */
+    public inspect(
+        includePath: string,
+        fromFilePath?: string
+    ): { resolved: string | null; candidates: string[] } {
+        const found = this.findFile(includePath, fromFilePath);
+        return found
+            ? { resolved: found.fsPath, candidates: found.candidates }
+            : { resolved: null, candidates: [] };
+    }
+
+    /**
+     * ファイル名検索の索引に登録されているファイル数を返します（診断用）。
+     *
+     * @returns 索引に登録されているファイル数
+     */
+    public countIndexedFiles(): number {
+        let count = 0;
+        this.getFileNameIndex().forEach(list => { count += list.length; });
+        return count;
+    }
+
+    /**
+     * 指定ファイルのASTを取得します（診断用。パースできない場合は null）。
+     *
+     * @param fsPath 対象ファイルの絶対パス
+     * @returns パース結果のAST
+     */
+    public getTree(fsPath: string): Parser.Tree | null {
+        return this.parseFile(fsPath);
+    }
+
     private findFile(
         includePath: string,
         fromFilePath?: string
-    ): { fsPath: string; ambiguous: boolean } | null {
+    ): { fsPath: string; ambiguous: boolean; candidates: string[] } | null {
         let fromFsPath: string | null = null;
         if (fromFilePath) {
             try {
@@ -221,13 +259,17 @@ export class FileIncludeResolver implements IncludeResolver {
             if (foundByName.length === 0) {
                 return null;
             }
-            return { fsPath: foundByName[0], ambiguous: foundByName.length > 1 };
+            return {
+                fsPath: foundByName[0],
+                ambiguous: foundByName.length > 1,
+                candidates: foundByName
+            };
         }
 
         if (existing.length === 0) {
             return null;
         }
-        return { fsPath: existing[0], ambiguous: existing.length > 1 };
+        return { fsPath: existing[0], ambiguous: existing.length > 1, candidates: existing };
     }
 
     /**
