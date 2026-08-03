@@ -2,7 +2,7 @@
   "name": "c-function-analyzer",
   "displayName": "C Function Analyzer",
   "description": "C言語の選択された関数を簡易解析し、入出力変数や呼び出し関数を別ウィンドウに表示します。",
-  "version": "2.19.0",
+  "version": "2.20.0",
   "publisher": "antigravity",
   "repository": {
     "type": "git",
@@ -15,7 +15,8 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:c-function-analyzer.analyze"
+    "onCommand:c-function-analyzer.analyze",
+    "onCommand:c-function-analyzer.diagnoseIncludes"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -23,6 +24,11 @@
       {
         "command": "c-function-analyzer.analyze",
         "title": "関数を解析 (Analyze C Function)"
+      },
+      {
+        "command": "c-function-analyzer.diagnoseIncludes",
+        "title": "インクルード探索の診断 (Diagnose Include Resolution)",
+        "category": "C Function Analyzer"
       }
     ],
     "keybindings": [
@@ -36,6 +42,11 @@
       "editor/context": [
         {
           "command": "c-function-analyzer.analyze",
+          "when": "editorLangId == c",
+          "group": "navigation"
+        },
+        {
+          "command": "c-function-analyzer.diagnoseIncludes",
           "when": "editorLangId == c",
           "group": "navigation"
         }
@@ -69,7 +80,7 @@
     "vscode:prepublish": "npm run compile",
     "compile": "node scripts/copy-wasm.js && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:web-tree-sitter --format=cjs --platform=node",
     "watch": "node scripts/copy-wasm.js && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:web-tree-sitter --format=cjs --platform=node --watch",
-    "build-test": "esbuild test/analyzer.test.ts test/highlight.test.ts test/webviewHtml.test.ts test/includeResolution.test.ts test/includePaths.test.ts test/macroRepair.test.ts --bundle --outdir=dist-test --out-extension:.js=.cjs --external:web-tree-sitter --external:tree-sitter-wasms --format=cjs --platform=node",
+    "build-test": "esbuild test/analyzer.test.ts test/highlight.test.ts test/webviewHtml.test.ts test/includeResolution.test.ts test/includePaths.test.ts test/macroRepair.test.ts test/includeDiagnostics.test.ts --bundle --outdir=dist-test --out-extension:.js=.cjs --external:web-tree-sitter --external:tree-sitter-wasms --format=cjs --platform=node",
     "typecheck": "tsc --noEmit",
     "test": "npm run typecheck && npm run build-test && node --test \"dist-test/**/*.cjs\""
   },
