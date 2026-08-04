@@ -31,7 +31,8 @@ export const WEBVIEW_STYLES = `
             padding: 12px;
             box-sizing: border-box;
             line-height: 1.45;
-            min-width: 480px;
+            /* 型名・名前・定義値・コメントの4欄が1行に収まる最小幅 */
+            min-width: 560px;
         }
 
         /* ヘッダ */
@@ -263,10 +264,12 @@ export const WEBVIEW_STYLES = `
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
-            text-align: right;
         }
 
+        /* 名前は固定幅とし、右に続く定義値・コメントの左端が行ごとに揃うようにする。
+           収まらない名前は末尾を省略し、全文はホバーで参照できる。 */
         .variable-name {
+            flex: 0 0 180px;
             font-family: var(--font-mono);
             font-size: 12px;
             color: var(--vscode-foreground, #cccccc);

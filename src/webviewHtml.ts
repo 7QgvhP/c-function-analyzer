@@ -106,6 +106,10 @@ function renderVariableList(vars: VariableInfo[]): string {
     if (vars.length === 0) {
         return '<div class="no-data">検出された変数はありません</div>';
     }
+    // 定義値の欄は、1件でも定義値を持つ項目があればセクション内の全行に出す。
+    // 行ごとに欄の有無が変わると、右に続くコメントの左端が揃わなくなるため。
+    const showValueColumn = vars.some(v => v.value);
+
     return vars.map(v => {
         // エディタ上に実体を持たない項目（戻り値など）はハイライト対象外とする
         const highlightable = v.highlightable !== false;
@@ -114,7 +118,7 @@ function renderVariableList(vars: VariableInfo[]): string {
         // 定義値（マクロの #define 値）は型名とは別の欄に表示する。
         // 長い値は省略表示になるため、全文は title で参照できるようにする。
         const value = v.value ? escapeHtml(v.value) : '';
-        const valueColumn = value
+        const valueColumn = showValueColumn
             ? `<span class="variable-value" title="${value}">${value}</span>`
             : '';
         // 宣言の右側に書かれた説明コメント
@@ -151,13 +155,16 @@ function renderCalledFunctions(funcs: FunctionInfo[]): string {
     if (funcs.length === 0) {
         return '<div class="no-data">関数呼び出しはありません</div>';
     }
+    // 変数リストと同じく、定義値の欄はセクション内で有無をそろえる
+    const showValueColumn = funcs.some(f => f.value);
+
     return funcs.map(f => {
         // 表示上の末尾 "()" を取り除いた名前を、ハイライト・コピーの対象とする
         const cleanName = escapeHtml(f.name.endsWith('()') ? f.name.slice(0, -2) : f.name);
         // 呼び出し関数は戻り値の型、マクロ関数は macro を型名欄に表示する
         const type = f.type ? escapeHtml(f.type) : '';
         const value = f.value ? escapeHtml(f.value) : '';
-        const valueColumn = value
+        const valueColumn = showValueColumn
             ? `<span class="variable-value" title="${value}">${value}</span>`
             : '';
         // 宣言の右側に書かれた説明コメント
