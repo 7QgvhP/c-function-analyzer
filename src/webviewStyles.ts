@@ -226,7 +226,7 @@ export const WEBVIEW_STYLES = `
 
         /* 型名は枠を残しつつ、色はアクセントに寄せて控えめに */
         .variable-type {
-            flex: 0 0 140px;
+            flex: 0 0 94px;
             font-family: var(--font-mono);
             font-size: 12px;
             color: var(--accent-color);
@@ -251,6 +251,19 @@ export const WEBVIEW_STYLES = `
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+        }
+
+        /* 宣言の右側に書かれた説明コメント。行の右端に置き、残り幅を使う。
+           コードではなく説明文のため、等幅ではなく通常のフォントで表示する。 */
+        .variable-comment {
+            flex: 1 1 0;
+            min-width: 0;
+            font-size: 12px;
+            color: var(--text-muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            text-align: right;
         }
 
         .variable-name {

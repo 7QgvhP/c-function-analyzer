@@ -1990,3 +1990,181 @@ void work(void) {
         assert.equal(findVar(r.outputs, 'v_var')?.type, 'int');
     });
 });
+
+describe('フェーズ5: 宣言の右側のコメント', () => {
+    test('グローバル変数・内部変数・引数のコメントを取得する (v2.21.0)', async () => {
+        const r = await analyzeOrThrow(`
+extern int g_count;          /* 実行回数 */
+
+int work(int ch /* チャンネル */)
+{
+    int local = 0;           /* 作業用 */
+    g_count = local + ch;
+    return g_count;
+}
+`, 'int work(');
+        assert.equal(findVar(r.outputs, 'g_count')?.comment, '実行回数');
+        assert.equal(findVar(r.internalVariables, 'local')?.comment, '作業用');
+        assert.equal(findVar(r.inputs, 'ch')?.comment, 'チャンネル');
+    });
+
+    test('行コメントもブロックコメントも取得する (v2.21.0)', async () => {
+        const r = await analyzeOrThrow(`
+extern int a_var;    // 行コメント
+extern int b_var;    /* ブロックコメント */
+
+void work(void) {
+    a_var = 1;
+    b_var = 2;
+}
+`, 'void work(');
+        assert.equal(findVar(r.outputs, 'a_var')?.comment, '行コメント');
+        assert.equal(findVar(r.outputs, 'b_var')?.comment, 'ブロックコメント');
+    });
+
+    test('構造体メンバのコメントを取得する (v2.21.0)', async () => {
+        const r = await analyzeOrThrow(`
+struct Config {
+    int mode;        /* 動作モード */
+    int offset;      // 補正値
+};
+extern struct Config g_cfg;
+
+void work(void) {
+    g_cfg.mode = 1;
+    g_cfg.offset = 2;
+}
+`, 'void work(');
+        assert.equal(findVar(r.outputs, 'g_cfg.mode')?.comment, '動作モード');
+        assert.equal(findVar(r.outputs, 'g_cfg.offset')?.comment, '補正値');
+    });
+
+    test('マクロと enum のコメントを取得する (v2.21.0)', async () => {
+        const r = await analyzeOrThrow(`
+#define MAX_LIMIT 100        /* 上限値 */
+enum State { ST_RUN = 1 };   /* 実行中 */
+
+int a;
+
+void work(void) {
+    a = MAX_LIMIT + ST_RUN;
+}
+`, 'void work(');
+        assert.equal(r.macroVariables?.find(v => v.name === 'MAX_LIMIT')?.comment, '上限値');
+        assert.equal(r.macroVariables?.find(v => v.name === 'ST_RUN')?.comment, '実行中');
+    });
+
+    test('関数宣言のコメントを取得する (v2.21.0)', async () => {
+        const r = await analyzeOrThrow(`
+int calc(int x);     /* 計算する */
+
+void work(void) {
+    calc(1);
+}
+`, 'void work(');
+        assert.equal(r.calledFunctions.find(f => f.name === 'calc')?.comment, '計算する');
+    });
+
+    test('次の行のコメントは取得しない (v2.21.0)', async () => {
+        const r = await analyzeOrThrow(`
+extern int g_count;
+/* これは g_count の説明ではない */
+
+void work(void) {
+    g_count = 1;
+}
+`, 'void work(');
+        assert.equal(findVar(r.outputs, 'g_count')?.comment, undefined);
+    });
+
+    test('コメントがない宣言では未設定にする (v2.21.0)', async () => {
+        const r = await analyzeOrThrow(`
+extern int g_count;
+
+void work(void) {
+    g_count = 1;
+}
+`, 'void work(');
+        assert.equal(findVar(r.outputs, 'g_count')?.comment, undefined);
+    });
+
+    test('コメント内の余分な空白を詰める (v2.21.0)', async () => {
+        const r = await analyzeOrThrow(`
+extern int g_count;    /*    実行   回数    */
+
+void work(void) {
+    g_count = 1;
+}
+`, 'void work(');
+        assert.equal(findVar(r.outputs, 'g_count')?.comment, '実行 回数');
+    });
+
+    test('インクルード先のコメントも取得する (v2.21.0)', async () => {
+        // ヘッダ側の宣言に付いたコメントが表示されること（実ファイルは使わない）
+        const r = await analyzeOrThrow(`
+struct Config {
+    int mode;    /* ヘッダ相当の説明 */
+};
+extern struct Config g_cfg;
+
+void work(void) {
+    g_cfg.mode = 1;
+}
+`, 'void work(');
+        assert.equal(findVar(r.outputs, 'g_cfg.mode')?.comment, 'ヘッダ相当の説明');
+    });
+});
+
+describe('フェーズ5: コメント記号の除去', () => {
+    /** コメントの書き方と、取り出されるべき本文 */
+    const FORMS: { label: string; comment: string }[] = [
+        { label: '行コメント', comment: '// 説明' },
+        { label: 'Doxygen 行（!）', comment: '//! 説明' },
+        { label: 'Doxygen 行（!<）', comment: '//!< 説明' },
+        { label: 'Doxygen 行（///）', comment: '/// 説明' },
+        { label: 'Doxygen 行（///<）', comment: '///< 説明' },
+        { label: 'Doxygen 行（//<）', comment: '//< 説明' },
+        { label: 'ブロックコメント', comment: '/* 説明 */' },
+        { label: 'Doxygen ブロック（**）', comment: '/** 説明 */' },
+        { label: 'Doxygen ブロック（**<）', comment: '/**< 説明 */' },
+        { label: 'Doxygen ブロック（!）', comment: '/*! 説明 */' },
+        { label: 'Doxygen ブロック（!<）', comment: '/*!< 説明 */' },
+        { label: '空白なし（ブロック）', comment: '/*!<説明*/' },
+        { label: '空白なし（行）', comment: '//!<説明' }
+    ];
+
+    for (const form of FORMS) {
+        test(`${form.label}: ${form.comment} から記号を除く (v2.21.0)`, async () => {
+            const r = await analyzeOrThrow(`
+extern int g_value;    ${form.comment}
+
+void work(void) {
+    g_value = 1;
+}
+`, 'void work(');
+            assert.equal(findVar(r.outputs, 'g_value')?.comment, '説明');
+        });
+    }
+
+    test('本文中のアスタリスクは残す (v2.21.0)', async () => {
+        const r = await analyzeOrThrow(`
+extern int g_value;    /*!< a * b の結果 */
+
+void work(void) {
+    g_value = 1;
+}
+`, 'void work(');
+        assert.equal(findVar(r.outputs, 'g_value')?.comment, 'a * b の結果');
+    });
+
+    test('本文が空のコメントは空文字列にする (v2.21.0)', async () => {
+        const r = await analyzeOrThrow(`
+extern int g_value;    /**/
+
+void work(void) {
+    g_value = 1;
+}
+`, 'void work(');
+        assert.equal(findVar(r.outputs, 'g_value')?.comment, '');
+    });
+});

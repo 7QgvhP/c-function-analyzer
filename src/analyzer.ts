@@ -48,6 +48,8 @@ export interface VariableInfo {
      * 値を持たない項目では未設定です。
      */
     value?: string;
+    /** 宣言の右側に書かれたコメント（説明書き）。無い場合は未設定 */
+    comment?: string;
 }
 
 /** インクルードファイルの解決結果 */
@@ -92,6 +94,8 @@ export interface FunctionInfo {
     type?: string;
     /** 定義値（マクロ関数の展開内容）。持たない場合は未設定 */
     value?: string;
+    /** 宣言の右側に書かれたコメント（説明書き）。無い場合は未設定 */
+    comment?: string;
     /** 宣言・定義されている位置。特定できなかった場合は未設定 */
     definition?: DefinitionLocation;
 }
@@ -132,6 +136,8 @@ interface ParamInfo {
     isPointer: boolean;
     /** 引数が宣言されている位置 */
     definition: DefinitionLocation;
+    /** 宣言の右側に書かれたコメント（説明書き）。無い場合は未設定 */
+    comment?: string;
 }
 
 /** 宣言された変数の情報（ローカル変数・ファイルスコープ変数で共用） */
@@ -142,6 +148,8 @@ interface DeclaredVar {
     arrayDimensions: string[];
     /** 宣言されている位置 */
     definition: DefinitionLocation;
+    /** 宣言の右側に書かれたコメント（説明書き）。無い場合は未設定 */
+    comment?: string;
     /**
      * 型がその場で定義された無名の構造体・共用体である場合のメンバ一覧です。
      *
@@ -158,6 +166,8 @@ interface FunctionDeclaration {
     definition: DefinitionLocation;
     /** 戻り値の型（例: `int`、`void`、`static char*`） */
     returnType: string;
+    /** 宣言の右側に書かれたコメント（説明書き）。無い場合は未設定 */
+    comment?: string;
 }
 
 /** マクロ定義の情報 */
@@ -171,6 +181,8 @@ interface MacroDefinition {
      * `#define` は `macro`、`enum` の列挙子は `enum` です。
      */
     kind: 'macro' | 'enum';
+    /** 定義の右側に書かれたコメント（説明書き）。無い場合は未設定 */
+    comment?: string;
 }
 
 /** 構造体・共用体のメンバ一覧（メンバ名 → 型情報） */
@@ -262,6 +274,92 @@ interface DeclaratorInfo {
     isFunctionPointer: boolean;
     /** 識別子ノードの位置。名前が解決できなかった場合は null */
     position: DefinitionLocation | null;
+}
+
+/**
+ * 宣言の右側に書かれたコメントを取得します。
+ *
+ * 組込みコードでは、変数やメンバの宣言の右にその説明を書く習慣が広くあります。
+ *
+ * ```c
+ * extern U8 g_mode;    // 動作モード
+ * struct Config {
+ *     S16 offset;      // 補正値
+ * };
+ * ```
+ *
+ * ブロックコメント（`/` + `* ... *` + `/`）も同様に扱います。
+ *
+ * コメントは宣言ノードの**後続の兄弟**として現れるため、同じ行にある限り
+ * 兄弟を辿り、見つからなければ親（同じ行で終わるものに限る）へ上がって探します。
+ * 行が変わった時点で打ち切るため、次の行のコメントを拾うことはありません。
+ *
+ * @param node 宣言位置を示すノード（識別子など）
+ * @returns コメント本文（記号と余分な空白を除いたもの）。無い場合は undefined
+ */
+function findTrailingComment(node: Parser.SyntaxNode): string | undefined {
+    const row = node.startPosition.row;
+    let current: Parser.SyntaxNode | null = node;
+
+    while (current) {
+        for (let sibling = current.nextSibling; sibling; sibling = sibling.nextSibling) {
+            // 行が変わったら、その宣言に付随するコメントではない
+            if (sibling.startPosition.row !== row) {
+                return undefined;
+            }
+            if (sibling.type === 'comment') {
+                return normalizeComment(sibling.text);
+            }
+        }
+
+        // 同じ行で終わる親に限り、一段上の階層でも探す
+        const parent: Parser.SyntaxNode | null = current.parent;
+        if (!parent || parent.endPosition.row !== row) {
+            return undefined;
+        }
+        current = parent;
+    }
+    return undefined;
+}
+
+/**
+ * コメントのテキストから記号と余分な空白を取り除きます。
+ *
+ * 通常のコメント記号に加え、Doxygen 形式の目印（`!` と、直前の要素を指す `<`）も
+ * 取り除きます。組込みコードでは宣言の右側に `//!<` や `/**< ... *``/` と書く習慣があるためです。
+ *
+ * | 記述 | 取り出される本文 |
+ * |---|---|
+ * | `// 説明` | `説明` |
+ * | `//!< 説明` | `説明` |
+ * | `///< 説明` | `説明` |
+ * | `/`+`* 説明 *`+`/` | `説明` |
+ * | `/`+`**< 説明 *`+`/` | `説明` |
+ *
+ * @param text コメントノードのテキスト（ブロックコメント／行コメントのいずれも可）
+ * @returns 表示用のコメント本文
+ */
+function normalizeComment(text: string): string {
+    // 開始記号（`/*` `/**` `/*!`）と Doxygen の `<`、終端記号で挟まれた本文を取り出す。
+    // 置換を重ねる方式では、空のコメント（記号だけ）で記号が残ってしまうため。
+    const block = text.match(/^\/\*+!?<?([\s\S]*?)\**\/$/);
+    if (block) {
+        return collapseSpaces(block[1]);
+    }
+
+    // 行コメントの開始記号（`//` `///` `//!`）と Doxygen の `<`
+    const line = text.match(/^\/\/+!?<?([\s\S]*)$/);
+    return collapseSpaces(line ? line[1] : text);
+}
+
+/**
+ * 連続する空白を1つにまとめ、前後の空白を取り除きます。
+ *
+ * @param text 対象のテキスト
+ * @returns 整形後のテキスト
+ */
+function collapseSpaces(text: string): string {
+    return text.replace(/\s+/g, ' ').trim();
 }
 
 /**
@@ -495,6 +593,8 @@ interface ResolvedAccessPath {
      * 解決できなかった場合は undefined（「定義へ」ボタンを表示しません）。
      */
     definition?: DefinitionLocation;
+    /** 最終的に参照している変数・メンバのコメント */
+    comment?: string;
 }
 
 /** アクセスパスの起点となる変数の情報 */
@@ -502,6 +602,7 @@ interface AccessPathRoot {
     type: string;
     arrayDimensions: string[];
     definition?: DefinitionLocation;
+    comment?: string;
     inlineMembers?: StructMembers;
 }
 
@@ -573,7 +674,7 @@ function resolveAccessPath(
         ? current.type
         : formatArrayType(current.type, current.arrayDimensions);
 
-    return { name, type, definition: current.definition };
+    return { name, type, definition: current.definition, comment: current.comment };
 }
 
 /**
@@ -647,7 +748,8 @@ function collectDeclaredVars(
         into.set(info.name, {
             type: typeText + (info.pointerDepth > 0 ? '*' : ''),
             arrayDimensions: info.arrayDimensions,
-            definition: info.position
+            definition: info.position,
+            comment: findTrailingComment(decl)
         });
     }
 }
@@ -698,7 +800,8 @@ function collectFileScopeFunctions(
                     // 定義は宣言より優先するため上書きする
                     functions.set(info.name, {
                         definition: info.position,
-                        returnType: extractReturnType(node, declaratorNode, info.pointerDepth)
+                        returnType: extractReturnType(node, declaratorNode, info.pointerDepth),
+                        comment: findTrailingComment(declaratorNode)
                     });
                 }
             }
@@ -723,7 +826,8 @@ function collectFileScopeFunctions(
                 if (!functions.has(info.name)) {
                     functions.set(info.name, {
                         definition: info.position,
-                        returnType: extractReturnType(node, child, info.pointerDepth)
+                        returnType: extractReturnType(node, child, info.pointerDepth),
+                        comment: findTrailingComment(child)
                     });
                 }
             }
@@ -814,7 +918,8 @@ function collectMacros(
         macros.set(nameNode.text, {
             value: valueNode ? normalizeMacroValue(valueNode.text) : '',
             definition: toDefinitionLocation(nameNode, origin),
-            kind: 'macro'
+            kind: 'macro',
+            comment: findTrailingComment(nameNode)
         });
     });
 
@@ -889,7 +994,8 @@ function collectEnumConstants(
                     into.set(nameNode.text, {
                         value,
                         definition: toDefinitionLocation(nameNode, origin),
-                        kind: 'enum'
+                        kind: 'enum',
+                        comment: findTrailingComment(nameNode)
                     });
                 }
             }
@@ -1606,7 +1712,8 @@ function parseSignature(funcNode: Parser.SyntaxNode): SignatureInfo {
                 arrayDepth: info.arrayDepth,
                 // ポインタ宣言および配列宣言をポインタ（書き込み可能）として認識
                 isPointer: info.pointerDepth > 0 || info.arrayDepth > 0,
-                definition: info.position
+                definition: info.position,
+                comment: findTrailingComment(child)
             });
         }
     }
@@ -1788,6 +1895,12 @@ function buildResult(
             info.definition = definition;
         }
 
+        // 宣言の右側のコメントは、マクロ定義よりも宣言側を優先する
+        const comment = (declared && declared.comment) || (macro && macro.comment);
+        if (comment) {
+            info.comment = comment;
+        }
+
         // 定義が見つかればそれに従い、見つからなければ大文字かどうかで推定する
         if (shouldClassifyAsMacro(func, macro !== undefined, declared !== undefined, classifyAllUppercaseAsMacros)) {
             // マクロ関数には戻り値の型がないため、変数側と同じく macro と表示する
@@ -1817,7 +1930,8 @@ function buildResult(
             const paramVar = {
                 type: fullType,
                 arrayDimensions: [] as string[],
-                definition: p.definition
+                definition: p.definition,
+                comment: p.comment
             };
 
             if (matchingWrites.length > 0) {
@@ -1827,7 +1941,8 @@ function buildResult(
                         name: resolvedPath.name,
                         type: resolvedPath.type,
                         details: '出力引数（ポインタ書き込みあり）',
-                        definition: resolvedPath.definition
+                        definition: resolvedPath.definition,
+                        comment: resolvedPath.comment
                     });
                 });
             }
@@ -1839,7 +1954,8 @@ function buildResult(
                         name: resolvedPath.name,
                         type: resolvedPath.type,
                         details: '入力引数（ポインタ読み取りあり）',
-                        definition: resolvedPath.definition
+                        definition: resolvedPath.definition,
+                        comment: resolvedPath.comment
                     });
                 });
             }
@@ -1849,7 +1965,8 @@ function buildResult(
                     name: p.name,
                     type: fullType,
                     details: '入力引数（ポインタ読み取りあり）',
-                    definition: p.definition
+                    definition: p.definition,
+                    comment: p.comment
                 });
             }
         } else {
@@ -1857,7 +1974,8 @@ function buildResult(
                 name: p.name,
                 type: fullType,
                 details: '入力引数（値渡し）',
-                definition: p.definition
+                definition: p.definition,
+                comment: p.comment
             });
         }
     });
@@ -1915,6 +2033,9 @@ function buildResult(
                     if (macro.value) {
                         entry.value = macro.value;
                     }
+                    if (macro.comment) {
+                        entry.comment = macro.comment;
+                    }
                 }
                 macroVariables.push(entry);
             } else {
@@ -1926,7 +2047,8 @@ function buildResult(
                         name: resolvedPath.name,
                         type: resolvedPath.type,
                         details,
-                        definition: resolvedPath.definition
+                        definition: resolvedPath.definition,
+                        comment: resolvedPath.comment
                     });
                 } else {
                     target.push({ name: path, type: UNKNOWN_TYPE, details });
@@ -1945,7 +2067,8 @@ function buildResult(
         internalVariables.push({
             name,
             type: formatArrayType(declared.type, declared.arrayDimensions),
-            definition: declared.definition
+            definition: declared.definition,
+            comment: declared.comment
         });
     });
 

@@ -11,7 +11,7 @@
 #include "../platform/types.h"
 
 /* センサーの状態しきい値 */
-#define SENSOR_ERROR_LIMIT 3
+#define SENSOR_ERROR_LIMIT 3    /* 連続エラーの許容回数 */
 
 /* センサーの動作状態（enum の列挙子はマクロ変数として定義値付きで表示される） */
 enum SensorState {
@@ -23,18 +23,18 @@ enum SensorState {
 
 /* 1つのセンサーが保持する測定値 */
 struct SensorReading {
-    U8  channel;
-    S16 raw_value;
-    U32 measured_at;
+    U8  channel;         /**< センサーのチャンネル番号 */
+    S16 raw_value;       ///< 補正前の測定値
+    U32 measured_at;     //!< 測定時刻 [ms]
 };
 
 /* 全センサーの測定値テーブル（グローバル変数） */
 extern struct SensorReading g_readings[MAX_SENSOR_COUNT];
 
 /* 連続エラー回数（グローバル変数） */
-extern U8 g_error_count;
+extern U8 g_error_count;        //!< 連続エラー回数（Doxygen 形式）
 
 /* ハードウェアから生値を読み出す */
-S16 hal_read_raw(U8 channel);
+S16 hal_read_raw(U8 channel);   /* ハードウェアから生値を読み出す */
 
 #endif /* HAL_SENSOR_HAL_H */
