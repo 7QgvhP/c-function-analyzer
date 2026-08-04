@@ -1,7 +1,13 @@
 import * as vscode from 'vscode';
 import { AnalysisResult } from './analyzer';
 import { buildHighlightRegex } from './highlight';
-import { CopyFormat, createNonce, renderAnalysisHtml } from './webviewHtml';
+import {
+    clampCommentWidth,
+    CopyFormat,
+    createNonce,
+    DEFAULT_COMMENT_WIDTH,
+    renderAnalysisHtml
+} from './webviewHtml';
 
 export class FunctionAnalyzerWebview {
     public static currentPanel: FunctionAnalyzerWebview | undefined;
@@ -11,6 +17,9 @@ export class FunctionAnalyzerWebview {
     private _result: AnalysisResult;
     /** コピー時の出力形式（パネルを開いている間、別の関数を解析しても保持されます） */
     private _copyFormat: CopyFormat = 'name';
+
+    /** コメント欄の幅（px）。区切り線のドラッグで変更される */
+    private _commentWidth: number = DEFAULT_COMMENT_WIDTH;
 
     /**
      * Webview を表示するか、既存のパネルを更新します。
@@ -61,6 +70,12 @@ export class FunctionAnalyzerWebview {
                     case 'revealDefinition':
                         this._revealDefinition(message.line, message.column, message.filePath);
                         break;
+                    case 'setCommentWidth':
+                        // 再描画時にも幅を保つため、拡張機能側で保持する
+                        if (typeof message.width === 'number') {
+                            this._commentWidth = clampCommentWidth(message.width);
+                        }
+                        break;
                     case 'setCopyFormat':
                         // 再描画時にも選択を保つため、拡張機能側で保持する
                         if (message.format === 'name' || message.format === 'typeAndName') {
@@ -96,7 +111,12 @@ export class FunctionAnalyzerWebview {
         this._result = result;
         this._panel.title = `Analysis: ${result.functionName}`;
         // Content-Security-Policy 用の nonce は描画のたびに新しく生成する
-        this._panel.webview.html = renderAnalysisHtml(result, createNonce(), this._copyFormat);
+        this._panel.webview.html = renderAnalysisHtml(
+            result,
+            createNonce(),
+            this._copyFormat,
+            this._commentWidth
+        );
     }
 
     /**
