@@ -117,13 +117,19 @@ function renderVariableList(vars: VariableInfo[]): string {
         const valueColumn = value
             ? `<span class="variable-value" title="${value}">${value}</span>`
             : '';
+        // 宣言の右側に書かれた説明コメント
+        const comment = v.comment ? escapeHtml(v.comment) : '';
+        const commentColumn = comment
+            ? `<span class="variable-comment" title="${comment}">${comment}</span>`
+            : '';
         return `
-                <div class="variable-item" data-name="${name}" data-type="${type}" data-value="${value}" data-highlightable="${highlightable}"${renderDefinitionAttrs(v.definition)}>
+                <div class="variable-item" data-name="${name}" data-type="${type}" data-value="${value}" data-comment="${comment}" data-highlightable="${highlightable}"${renderDefinitionAttrs(v.definition)}>
                     <div class="variable-row">
                         <div class="variable-info">
                             <span class="variable-type">${type}</span>
                             <span class="variable-name">${name}</span>${renderAmbiguousMark(v.definition)}
                             ${valueColumn}
+                            ${commentColumn}
                         </div>
                         <div class="variable-actions">
                             ${renderDefinitionButton(v.definition)}
@@ -154,13 +160,19 @@ function renderCalledFunctions(funcs: FunctionInfo[]): string {
         const valueColumn = value
             ? `<span class="variable-value" title="${value}">${value}</span>`
             : '';
+        // 宣言の右側に書かれた説明コメント
+        const comment = f.comment ? escapeHtml(f.comment) : '';
+        const commentColumn = comment
+            ? `<span class="variable-comment" title="${comment}">${comment}</span>`
+            : '';
         return `
-                <div class="variable-item" data-name="${cleanName}" data-type="${type}" data-value="${value}" data-highlightable="true"${renderDefinitionAttrs(f.definition)}>
+                <div class="variable-item" data-name="${cleanName}" data-type="${type}" data-value="${value}" data-comment="${comment}" data-highlightable="true"${renderDefinitionAttrs(f.definition)}>
                     <div class="variable-row">
                         <div class="variable-info">
                             <span class="variable-type">${type}</span>
                             <span class="variable-name">${escapeHtml(f.name)}</span>${renderAmbiguousMark(f.definition)}
                             ${valueColumn}
+                            ${commentColumn}
                         </div>
                         <div class="variable-actions">
                             ${renderDefinitionButton(f.definition)}
@@ -321,7 +333,12 @@ ${macroFunctions.length > 0 ? renderSection('macro-fn', 'マクロ関数', macro
                 }
                 const type = item.getAttribute('data-type') || '';
                 const value = item.getAttribute('data-value') || '';
+                const comment = item.getAttribute('data-comment') || '';
+                // 定義値を持つ項目は 4 列、それ以外は 3 列になる
                 const columns = value ? [type, name, value] : [type, name];
+                if (comment) {
+                    columns.push(comment);
+                }
                 return columns.join('\\t');
             }).join('\\n');
         }

@@ -42,14 +42,21 @@ interface FakeItem {
  * @param type data-type の値
  * @param name data-name の値
  * @param value data-value の値（定義値。省略時は空）
+ * @param comment data-comment の値（説明コメント。省略時は空）
  * @returns ダミー要素
  */
-function fakeItem(type: string, name: string, value: string = ''): FakeItem {
+function fakeItem(
+    type: string,
+    name: string,
+    value: string = '',
+    comment: string = ''
+): FakeItem {
     return {
         getAttribute: (attr: string) => {
             if (attr === 'data-type') { return type; }
             if (attr === 'data-name') { return name; }
             if (attr === 'data-value') { return value; }
+            if (attr === 'data-comment') { return comment; }
             return null;
         }
     };
@@ -150,17 +157,17 @@ describe('renderAnalysisHtml: データ属性', () => {
             inputs: [{ name: 'value', type: 'int', details: '' }]
         }), 'N');
         assert.ok(
-            html.includes('data-name="value" data-type="int" data-value="" data-highlightable="true"'),
+            html.includes('data-name="value" data-type="int" data-value="" data-comment="" data-highlightable="true"'),
             'ハイライト対象として出力されること'
         );
     });
 
-    test('highlightable が false の項目は data-highlightable="false" となる', () => {
+    test('highlightable が false の項目は data-comment="" data-highlightable="false" となる', () => {
         const html = renderAnalysisHtml(makeResult({
             outputs: [{ name: '戻り値 (return)', type: 'int', details: '', highlightable: false }]
         }), 'N');
         assert.ok(
-            html.includes('data-name="戻り値 (return)" data-type="int" data-value="" data-highlightable="false"'),
+            html.includes('data-name="戻り値 (return)" data-type="int" data-value="" data-comment="" data-highlightable="false"'),
             'ハイライト対象外として出力されること'
         );
     });
@@ -551,5 +558,74 @@ describe('renderAnalysisHtml: セクション構成', () => {
         const html = renderAnalysisHtml(makeResult({ functionName: 'process_data' }), 'N');
         assert.ok(html.includes('<title>Function Analysis: process_data</title>'), 'タイトルに関数名が入ること');
         assert.ok(html.includes('<span>process_data</span>'), 'ヘッダーに関数名が入ること');
+    });
+});
+
+describe('renderAnalysisHtml: コメント欄', () => {
+    test('変数のコメントを専用の欄へ出力する', () => {
+        const html = renderAnalysisHtml(makeResult({
+            inputs: [{ name: 'channel', type: 'U8', details: '', comment: 'チャンネル番号' }]
+        }), 'N');
+        assert.ok(
+            html.includes('<span class="variable-comment" title="チャンネル番号">チャンネル番号</span>'),
+            `コメント欄が出力されること:\n${html}`
+        );
+        assert.ok(html.includes('data-comment="チャンネル番号"'), 'データ属性としても出力されること');
+    });
+
+    test('呼び出し関数のコメントも出力する', () => {
+        const html = renderAnalysisHtml(makeResult({
+            calledFunctions: [{ name: 'calc', type: 'int', comment: '計算する' }]
+        }), 'N');
+        assert.ok(html.includes('<span class="variable-comment" title="計算する">計算する</span>'));
+    });
+
+    test('コメントがない項目では欄を出力しない', () => {
+        const html = renderAnalysisHtml(makeResult({
+            inputs: [{ name: 'channel', type: 'U8', details: '' }]
+        }), 'N');
+        assert.ok(!html.includes('class="variable-comment"'), 'コメント欄が出ないこと');
+        assert.ok(html.includes('data-comment=""'), 'データ属性は空で出力されること');
+    });
+
+    test('コメントをHTMLエスケープする', () => {
+        const html = renderAnalysisHtml(makeResult({
+            inputs: [{ name: 'v', type: 'int', details: '', comment: '<img src=x>' }]
+        }), 'N');
+        assert.ok(!html.includes('<img src=x>'), '生のHTMLタグが混入しないこと');
+        assert.ok(html.includes('&lt;img src=x&gt;'), 'エスケープされた形で出力されること');
+    });
+});
+
+describe('buildCopyText: コメント列', () => {
+    test('型名 + 変数名 ではコメントを末尾の列に出す', () => {
+        const html = renderAnalysisHtml(makeResult(), 'N', 'typeAndName');
+        const build = extractBuildCopyText(html, 'typeAndName');
+        assert.equal(
+            build([fakeItem('U8', 'channel', '', 'チャンネル番号')]),
+            'U8\tchannel\tチャンネル番号'
+        );
+    });
+
+    test('定義値を持つ項目は 4 列になる', () => {
+        const html = renderAnalysisHtml(makeResult(), 'N', 'typeAndName');
+        const build = extractBuildCopyText(html, 'typeAndName');
+        assert.equal(
+            build([fakeItem('macro', 'MAX_LIMIT', '100', '上限値')]),
+            'macro\tMAX_LIMIT\t100\t上限値'
+        );
+    });
+
+    test('コメントがない項目は従来どおりの列数になる', () => {
+        const html = renderAnalysisHtml(makeResult(), 'N', 'typeAndName');
+        const build = extractBuildCopyText(html, 'typeAndName');
+        assert.equal(build([fakeItem('int', 'count')]), 'int\tcount');
+        assert.equal(build([fakeItem('macro', 'MAX', '10')]), 'macro\tMAX\t10');
+    });
+
+    test('変数名のみの形式ではコメントを含めない', () => {
+        const html = renderAnalysisHtml(makeResult(), 'N', 'name');
+        const build = extractBuildCopyText(html, 'name');
+        assert.equal(build([fakeItem('U8', 'channel', '', 'チャンネル番号')]), 'channel');
     });
 });

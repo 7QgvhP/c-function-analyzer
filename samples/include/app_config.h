@@ -12,23 +12,23 @@
 #include "../platform/types.h"   /* 既に hal 経由で読み込み済み（重複展開されないことの確認用） */
 
 /* 判定に用いるしきい値 */
-#define WARN_THRESHOLD  1000
-#define ALERT_THRESHOLD 2000
+#define WARN_THRESHOLD  1000    /* 警告と判定するしきい値 */
+#define ALERT_THRESHOLD 2000    /* 異常と判定するしきい値 */
 
 /* 動作モード */
 struct AppConfig {
-    U8  mode;
-    S16 offset;
-    U8  enabled_channels[MAX_SENSOR_COUNT];
+    U8  mode;                   /* 動作モード（0:停止 1:計測） */
+    S16 offset;                 /* 測定値の補正量 */
+    U8  enabled_channels[MAX_SENSOR_COUNT];  /* 有効チャンネルの一覧 */
 };
 
 /* アプリケーション設定（グローバル変数） */
-extern struct AppConfig g_app_config;
+extern struct AppConfig g_app_config;   /* アプリケーション設定 */
 
 /* 直近の警告レベル（グローバル変数） */
-extern U8 g_warn_level;
+extern U8 g_warn_level;         /* 直近の警告レベル */
 
 /* ログ出力 */
-void app_log(const char *message);
+void app_log(const char *message);      /* ログを出力する */
 
 #endif /* APP_CONFIG_H */
