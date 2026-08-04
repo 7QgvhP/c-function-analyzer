@@ -7,7 +7,15 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { AnalysisResult } from '../src/analyzer';
-import { createNonce, escapeHtml, renderAnalysisHtml } from '../src/webviewHtml';
+import {
+    clampCommentWidth,
+    createNonce,
+    DEFAULT_COMMENT_WIDTH,
+    escapeHtml,
+    MAX_COMMENT_WIDTH,
+    MIN_COMMENT_WIDTH,
+    renderAnalysisHtml
+} from '../src/webviewHtml';
 
 /**
  * テスト用の解析結果を生成します。
@@ -627,5 +635,65 @@ describe('buildCopyText: コメント列', () => {
         const html = renderAnalysisHtml(makeResult(), 'N', 'name');
         const build = extractBuildCopyText(html, 'name');
         assert.equal(build([fakeItem('U8', 'channel', '', 'チャンネル番号')]), 'channel');
+    });
+});
+
+describe('clampCommentWidth', () => {
+    test('範囲内の値はそのまま返す', () => {
+        assert.equal(clampCommentWidth(300), 300);
+    });
+
+    test('下限・上限で丸める', () => {
+        assert.equal(clampCommentWidth(10), MIN_COMMENT_WIDTH);
+        assert.equal(clampCommentWidth(5000), MAX_COMMENT_WIDTH);
+    });
+
+    test('小数は四捨五入する', () => {
+        assert.equal(clampCommentWidth(260.6), 261);
+    });
+
+    test('数値として扱えない値は既定値にする', () => {
+        assert.equal(clampCommentWidth(NaN), DEFAULT_COMMENT_WIDTH);
+        assert.equal(clampCommentWidth(Infinity), DEFAULT_COMMENT_WIDTH);
+    });
+});
+
+describe('renderAnalysisHtml: コメント欄の幅', () => {
+    test('既定ではコメント欄の幅に既定値を出力する', () => {
+        const html = renderAnalysisHtml(makeResult(), 'N');
+        assert.ok(
+            html.includes(`--comment-width: ${DEFAULT_COMMENT_WIDTH}px`),
+            `既定の幅が出力されること`
+        );
+    });
+
+    test('指定した幅を出力する', () => {
+        const html = renderAnalysisHtml(makeResult(), 'N', 'name', 320);
+        assert.ok(html.includes('--comment-width: 320px'));
+    });
+
+    test('範囲外の幅は丸めて出力する', () => {
+        const html = renderAnalysisHtml(makeResult(), 'N', 'name', 5);
+        assert.ok(html.includes(`--comment-width: ${MIN_COMMENT_WIDTH}px`));
+    });
+
+    test('幅の指定は style 要素の中に出力する（CSP のため style 属性は使えない）', () => {
+        const html = renderAnalysisHtml(makeResult(), 'N', 'name', 320);
+        const styleStart = html.indexOf('<style nonce=');
+        const styleEnd = html.indexOf('</style>');
+        const insideStyle = html.substring(styleStart, styleEnd);
+        assert.ok(insideStyle.includes('--comment-width: 320px'), 'style 要素の中にあること');
+        assert.ok(!html.includes('style="'), 'style 属性を使っていないこと');
+    });
+
+    test('幅を調整する区切り線を出力する', () => {
+        const html = renderAnalysisHtml(makeResult(), 'N');
+        assert.ok(html.includes('class="comment-resizer"'), '区切り線が出力されること');
+        assert.ok(html.includes('class="layout-area"'), '区切り線を配置するラッパが出力されること');
+    });
+
+    test('区切り線のドラッグで幅を拡張機能へ通知する', () => {
+        const html = renderAnalysisHtml(makeResult(), 'N');
+        assert.ok(html.includes("command: 'setCommentWidth'"), '幅の通知を送ること');
     });
 });

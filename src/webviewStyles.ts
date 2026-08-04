@@ -195,6 +195,51 @@ export const WEBVIEW_STYLES = `
             background: var(--vscode-toolbar-hoverBackground, rgba(90, 93, 94, 0.31));
         }
 
+        /* コメント欄の幅を調整する区切り線。
+           位置は JS がコメント欄の左端に合わせて設定する。 */
+        .layout-area {
+            position: relative;
+        }
+
+        .comment-resizer {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 9px;
+            display: none;
+            cursor: col-resize;
+            z-index: 1;
+        }
+
+        /* 線そのものは普段は見せず、マウスを乗せたときとドラッグ中のみ表示する。
+           当たり判定（.comment-resizer）は常にあるため、線が見えなくても掴める。 */
+        .comment-resizer::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: 4px;
+            width: 1px;
+            background: var(--vscode-focusBorder, #007fd4);
+            opacity: 0;
+            transition: opacity 0.12s ease;
+        }
+
+        .comment-resizer:hover::before,
+        body.is-resizing .comment-resizer::before {
+            opacity: 1;
+        }
+
+        /* ドラッグ中は文字選択と行のホバー反応を抑える */
+        body.is-resizing {
+            cursor: col-resize;
+            user-select: none;
+        }
+
+        body.is-resizing .variable-item:hover {
+            background-color: transparent;
+        }
+
         /* 変数行 */
         .variable-list {
             padding: 3px 0;
@@ -241,10 +286,10 @@ export const WEBVIEW_STYLES = `
             text-overflow: ellipsis;
         }
 
-        /* 定義値（マクロの #define 値）。名前の右に置き、残り幅をすべて使う。
-           別の変数名が書かれていることがあるため、幅を優先的に確保する。 */
+        /* 定義値（マクロの #define 値）。名前のすぐ右に、内容の幅で表示する。
+           収まらない場合は縮めて末尾を省略し、全文はホバーで参照できる。 */
         .variable-value {
-            flex: 1 1 0;
+            flex: 0 1 auto;
             min-width: 0;
             font-family: var(--font-mono);
             font-size: 12px;
@@ -254,10 +299,13 @@ export const WEBVIEW_STYLES = `
             text-overflow: ellipsis;
         }
 
-        /* 宣言の右側に書かれた説明コメント。行の右端に置き、残り幅を使う。
+        /* 宣言の右側に書かれた説明コメント。
+           行の右端から固定幅で確保し、margin-left: auto で押し出すことで、
+           名前や定義値の長さによらず**左端の位置が全分類でそろう**ようにする。
            コードではなく説明文のため、等幅ではなく通常のフォントで表示する。 */
         .variable-comment {
-            flex: 1 1 0;
+            flex: 0 0 var(--comment-width, 260px);
+            margin-left: auto;
             min-width: 0;
             font-size: 12px;
             color: var(--text-muted);
@@ -266,10 +314,7 @@ export const WEBVIEW_STYLES = `
             text-overflow: ellipsis;
         }
 
-        /* 名前は固定幅とし、右に続く定義値・コメントの左端が行ごとに揃うようにする。
-           収まらない名前は末尾を省略し、全文はホバーで参照できる。 */
         .variable-name {
-            flex: 0 0 180px;
             font-family: var(--font-mono);
             font-size: 12px;
             color: var(--vscode-foreground, #cccccc);
@@ -279,11 +324,14 @@ export const WEBVIEW_STYLES = `
             min-width: 0;
         }
 
+        /* 「定義へ」ボタンの有無で右端がずれないよう、幅を固定して右寄せする。
+           ずれるとコメント欄の位置も行ごとに変わってしまうため。 */
         .variable-actions {
             display: flex;
             align-items: center;
+            justify-content: flex-end;
             gap: 2px;
-            flex-shrink: 0;
+            flex: 0 0 96px;
             opacity: 0;
         }
 

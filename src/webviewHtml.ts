@@ -106,10 +106,6 @@ function renderVariableList(vars: VariableInfo[]): string {
     if (vars.length === 0) {
         return '<div class="no-data">検出された変数はありません</div>';
     }
-    // 定義値の欄は、1件でも定義値を持つ項目があればセクション内の全行に出す。
-    // 行ごとに欄の有無が変わると、右に続くコメントの左端が揃わなくなるため。
-    const showValueColumn = vars.some(v => v.value);
-
     return vars.map(v => {
         // エディタ上に実体を持たない項目（戻り値など）はハイライト対象外とする
         const highlightable = v.highlightable !== false;
@@ -118,7 +114,7 @@ function renderVariableList(vars: VariableInfo[]): string {
         // 定義値（マクロの #define 値）は型名とは別の欄に表示する。
         // 長い値は省略表示になるため、全文は title で参照できるようにする。
         const value = v.value ? escapeHtml(v.value) : '';
-        const valueColumn = showValueColumn
+        const valueColumn = value
             ? `<span class="variable-value" title="${value}">${value}</span>`
             : '';
         // 宣言の右側に書かれた説明コメント
@@ -155,16 +151,13 @@ function renderCalledFunctions(funcs: FunctionInfo[]): string {
     if (funcs.length === 0) {
         return '<div class="no-data">関数呼び出しはありません</div>';
     }
-    // 変数リストと同じく、定義値の欄はセクション内で有無をそろえる
-    const showValueColumn = funcs.some(f => f.value);
-
     return funcs.map(f => {
         // 表示上の末尾 "()" を取り除いた名前を、ハイライト・コピーの対象とする
         const cleanName = escapeHtml(f.name.endsWith('()') ? f.name.slice(0, -2) : f.name);
         // 呼び出し関数は戻り値の型、マクロ関数は macro を型名欄に表示する
         const type = f.type ? escapeHtml(f.type) : '';
         const value = f.value ? escapeHtml(f.value) : '';
-        const valueColumn = showValueColumn
+        const valueColumn = value
             ? `<span class="variable-value" title="${value}">${value}</span>`
             : '';
         // 宣言の右側に書かれた説明コメント
@@ -254,19 +247,44 @@ function renderCopyFormatSelector(copyFormat: CopyFormat): string {
         </div>`;
 }
 
+/** コメント欄の既定の幅（px） */
+export const DEFAULT_COMMENT_WIDTH = 260;
+
+/** コメント欄の最小の幅（px）。狭すぎて読めなくならないようにする */
+export const MIN_COMMENT_WIDTH = 80;
+
+/** コメント欄の最大の幅（px）。型名・名前が潰れないようにする */
+export const MAX_COMMENT_WIDTH = 800;
+
+/**
+ * コメント欄の幅を許容範囲へ収めます。
+ *
+ * @param width 指定された幅
+ * @returns 範囲内に収めた幅（数値として扱えない場合は既定値）
+ */
+export function clampCommentWidth(width: number): number {
+    if (!Number.isFinite(width)) {
+        return DEFAULT_COMMENT_WIDTH;
+    }
+    return Math.min(MAX_COMMENT_WIDTH, Math.max(MIN_COMMENT_WIDTH, Math.round(width)));
+}
+
 /**
  * 解析結果から Webview 全体のHTMLを生成します。
  *
  * @param result 解析結果
  * @param nonce Content-Security-Policy で使用する nonce 値
  * @param copyFormat コピー時の出力形式（省略時は変数名のみ）
+ * @param commentWidth コメント欄の幅（px。省略時は既定値）
  * @returns 生成したHTML
  */
 export function renderAnalysisHtml(
     result: AnalysisResult,
     nonce: string,
-    copyFormat: CopyFormat = 'name'
+    copyFormat: CopyFormat = 'name',
+    commentWidth: number = DEFAULT_COMMENT_WIDTH
 ): string {
+    const width = clampCommentWidth(commentWidth);
     const macroVariables = result.macroVariables ?? [];
     const macroFunctions = result.macroFunctions ?? [];
 
@@ -289,6 +307,8 @@ export function renderAnalysisHtml(
     <title>Function Analysis: ${escapeHtml(result.functionName)}</title>
     <style nonce="${nonce}">
 ${WEBVIEW_STYLES}
+        /* コメント欄の幅（区切り線のドラッグで変更され、拡張機能側に保持される） */
+        :root { --comment-width: ${width}px; }
     </style>
 </head>
 <body>
@@ -301,6 +321,8 @@ ${renderCopyFormatSelector(copyFormat)}
     </div>
 ${ambiguousNotice}
 
+    <div class="layout-area">
+    <div class="comment-resizer" title="ドラッグしてコメント欄の幅を変更（すべての分類に反映されます）"></div>
     <div class="layout-grid">
         <!-- 入力変数セクション -->
 ${renderSection('input', '入力変数', result.inputs.length, renderVariableList(result.inputs))}
@@ -319,6 +341,7 @@ ${renderSection('called-fn', '呼び出し関数', result.calledFunctions.length
 
         <!-- マクロ関数セクション（該当がある場合のみ表示） -->
 ${macroFunctions.length > 0 ? renderSection('macro-fn', 'マクロ関数', macroFunctions.length, renderCalledFunctions(macroFunctions)) : ''}
+    </div>
     </div>
     <script nonce="${nonce}">
         const vscode = acquireVsCodeApi();
@@ -349,6 +372,79 @@ ${macroFunctions.length > 0 ? renderSection('macro-fn', 'マクロ関数', macro
                 return columns.join('\\t');
             }).join('\\n');
         }
+
+        // コメント欄の幅の調整（区切り線のドラッグ）。
+        // 幅は :root の CSS 変数1つで管理しているため、すべての分類へまとめて反映される。
+        const resizer = document.querySelector('.comment-resizer');
+        const layoutArea = document.querySelector('.layout-area');
+
+        /** 型名と名前のために必ず残す幅（px） */
+        const RESERVED_WIDTH = 200;
+
+        /** 現在のコメント欄の幅（px）を取得します */
+        function currentCommentWidth() {
+            const raw = getComputedStyle(document.documentElement).getPropertyValue('--comment-width');
+            const parsed = parseInt(raw, 10);
+            return isNaN(parsed) ? ${DEFAULT_COMMENT_WIDTH} : parsed;
+        }
+
+        /**
+         * 今の表示幅で許されるコメント欄の最大幅を求めます。
+         *
+         * 行の内容が収まらなくなると、名前や定義値が縮んだ結果コメント欄の左端が
+         * 行ごとにずれてしまうため、必ず余白が残る範囲に制限します。
+         */
+        function maxCommentWidth() {
+            const info = document.querySelector('.variable-info');
+            if (!info) {
+                return ${MAX_COMMENT_WIDTH};
+            }
+            const available = Math.round(info.getBoundingClientRect().width) - RESERVED_WIDTH;
+            return Math.max(${MIN_COMMENT_WIDTH}, Math.min(${MAX_COMMENT_WIDTH}, available));
+        }
+
+        /** コメント欄の幅を範囲内に収めて反映し、区切り線を合わせて配置します */
+        function applyCommentWidth(width) {
+            const clamped = Math.min(maxCommentWidth(), Math.max(${MIN_COMMENT_WIDTH}, Math.round(width)));
+            document.documentElement.style.setProperty('--comment-width', clamped + 'px');
+
+            const sample = document.querySelector('.variable-comment');
+            if (!resizer || !layoutArea || !sample) {
+                if (resizer) { resizer.style.display = 'none'; }
+                return;
+            }
+            const areaRect = layoutArea.getBoundingClientRect();
+            const commentRect = sample.getBoundingClientRect();
+            resizer.style.display = 'block';
+            resizer.style.left = (commentRect.left - areaRect.left - 5) + 'px';
+        }
+
+        if (resizer) {
+            resizer.addEventListener('mousedown', event => {
+                event.preventDefault();
+                const startX = event.clientX;
+                const startWidth = currentCommentWidth();
+                document.body.classList.add('is-resizing');
+
+                // 左へドラッグするほどコメント欄を広げる
+                const onMove = moveEvent => applyCommentWidth(startWidth - (moveEvent.clientX - startX));
+
+                const onUp = () => {
+                    document.removeEventListener('mousemove', onMove);
+                    document.removeEventListener('mouseup', onUp);
+                    document.body.classList.remove('is-resizing');
+                    // 再描画されても幅を保つため、拡張機能側にも伝える
+                    vscode.postMessage({ command: 'setCommentWidth', width: currentCommentWidth() });
+                };
+
+                document.addEventListener('mousemove', onMove);
+                document.addEventListener('mouseup', onUp);
+            });
+        }
+
+        // 表示幅が変わると許容できる最大幅も変わるため、その都度収め直す
+        applyCommentWidth(currentCommentWidth());
+        window.addEventListener('resize', () => applyCommentWidth(currentCommentWidth()));
 
         // コピー形式の切り替え
         document.querySelectorAll('.copy-format-option').forEach(button => {
