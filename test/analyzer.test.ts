@@ -2168,3 +2168,76 @@ void work(void) {
         assert.equal(findVar(r.outputs, 'g_value')?.comment, '');
     });
 });
+
+describe('フェーズ5: マクロ定義のコメント', () => {
+    /** マクロの書き方と、期待する定義値・コメント */
+    const CASES: { label: string; def: string; name: string; use: string; value: string; comment: string }[] = [
+        { label: 'ブロックコメント', def: '#define LIMIT 100    /* 上限値 */', name: 'LIMIT', use: 'a = LIMIT;', value: '100', comment: '上限値' },
+        { label: '行コメント', def: '#define LIMIT 100    // 上限値', name: 'LIMIT', use: 'a = LIMIT;', value: '100', comment: '上限値' },
+        { label: 'Doxygen 行', def: '#define LIMIT 100    //!< 上限値', name: 'LIMIT', use: 'a = LIMIT;', value: '100', comment: '上限値' },
+        { label: 'Doxygen ブロック', def: '#define LIMIT 100    /**< 上限値 */', name: 'LIMIT', use: 'a = LIMIT;', value: '100', comment: '上限値' },
+        { label: '式の値＋行コメント', def: '#define LIMIT (BASE + 1)    // 上限値', name: 'LIMIT', use: 'a = LIMIT;', value: '(BASE + 1)', comment: '上限値' },
+        { label: '関数形式＋行コメント', def: '#define SQ(x) ((x)*(x))    // 二乗', name: 'SQ', use: 'a = SQ(2);', value: '((x)*(x))', comment: '二乗' }
+    ];
+
+    for (const c of CASES) {
+        test(`${c.label}: 定義値とコメントを分けて取得する (v2.23.2)`, async () => {
+            const r = await analyzeOrThrow(`
+${c.def}
+int a;
+
+void work(void) {
+    ${c.use}
+}
+`, 'void work(');
+            // マクロ変数とマクロ関数は別のリストのため、両方から探す
+            const item: { value?: string; comment?: string } | undefined =
+                (r.macroVariables || []).find(v => v.name === c.name)
+                || (r.macroFunctions || []).find(v => v.name === c.name);
+            assert.ok(item, `${c.name} が含まれること`);
+            assert.equal(item.value, c.value, '定義値にコメントが混ざらないこと');
+            assert.equal(item.comment, c.comment);
+        });
+    }
+
+    test('値を持たないマクロの行コメントも取得する (v2.23.2)', async () => {
+        const r = await analyzeOrThrow(`
+#define ENABLED    // 有効化フラグ
+int a;
+
+void work(void) {
+    a = ENABLED;
+}
+`, 'void work(');
+        const item = (r.macroVariables || []).find(v => v.name === 'ENABLED');
+        assert.equal(item?.comment, '有効化フラグ');
+    });
+
+    test('文字列リテラル内の // はコメントとして扱わない (v2.23.2)', async () => {
+        const r = await analyzeOrThrow(`
+#define URL "http://example.com"    // 接続先
+int a;
+
+void work(void) {
+    a = (int)URL;
+}
+`, 'void work(');
+        const item = (r.macroVariables || []).find(v => v.name === 'URL');
+        assert.equal(item?.value, '"http://example.com"', 'リテラル内の // で切れないこと');
+        assert.equal(item?.comment, '接続先');
+    });
+
+    test('コメントがないマクロは従来どおり定義値のみとする (v2.23.2)', async () => {
+        const r = await analyzeOrThrow(`
+#define LIMIT 100
+int a;
+
+void work(void) {
+    a = LIMIT;
+}
+`, 'void work(');
+        const item = (r.macroVariables || []).find(v => v.name === 'LIMIT');
+        assert.equal(item?.value, '100');
+        assert.equal(item?.comment, undefined);
+    });
+});
