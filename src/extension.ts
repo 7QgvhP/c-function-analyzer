@@ -47,7 +47,7 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(diagnosticsChannel);
 
     // 2. コマンド 'c-function-analyzer.analyze' の登録
-    const disposable = vscode.commands.registerCommand('c-function-analyzer.analyze', () => {
+    const disposable = vscode.commands.registerCommand('c-function-analyzer.analyze', async () => {
         const editor = vscode.window.activeTextEditor;
         if (!editor) {
             vscode.window.showWarningMessage('アクティブなエディタがありません。');
@@ -63,7 +63,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const document = editor.document;
         const cursorLine = editor.selection.active.line; // 0始まりの行番号
 
-        try {
+        await runWithProgress('関数を解析しています…', () => {
             // ソースコード全体をパースしてASTを取得
             // （GLOBAL BYTE hoge; のような修飾子マクロ付き宣言は必要に応じて修復する）
             const sourceCode = document.getText();
@@ -90,10 +90,7 @@ export async function activate(context: vscode.ExtensionContext) {
             // Webview パネルを表示して解析結果を描画
             result.filePath = document.uri.toString();
             FunctionAnalyzerWebview.show(result);
-
-        } catch (err) {
-            vscode.window.showErrorMessage('関数の解析中にエラーが発生しました。');
-        }
+        }, '関数の解析中にエラーが発生しました。');
     });
 
     context.subscriptions.push(disposable);
@@ -101,9 +98,38 @@ export async function activate(context: vscode.ExtensionContext) {
     // 3. コマンド 'c-function-analyzer.diagnoseIncludes' の登録
     const diagnoseDisposable = vscode.commands.registerCommand(
         'c-function-analyzer.diagnoseIncludes',
-        () => runIncludeDiagnostics(parser, includeResolver, diagnosticsChannel)
+        async () => runIncludeDiagnostics(parser, includeResolver, diagnosticsChannel)
     );
     context.subscriptions.push(diagnoseDisposable);
+}
+
+/**
+ * 処理中であることを右下の通知に表示しながら、処理を実行します。
+ *
+ * 解析やインクルード探索は同期処理のため、そのまま実行すると通知が描画される前に
+ * 処理が始まってしまいます。重い処理の前に一度制御を返すことで、通知を先に表示します。
+ *
+ * @param title 通知に表示する文言
+ * @param work 実行する処理
+ * @param errorMessage 例外が発生した場合に表示する文言
+ */
+async function runWithProgress(
+    title: string,
+    work: () => void,
+    errorMessage: string
+): Promise<void> {
+    await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title },
+        async () => {
+            // 通知が描画されるよう、重い処理の前に一度制御を返す
+            await new Promise(resolve => setTimeout(resolve, 0));
+            try {
+                work();
+            } catch (err) {
+                vscode.window.showErrorMessage(errorMessage);
+            }
+        }
+    );
 }
 
 /**
@@ -116,11 +142,11 @@ export async function activate(context: vscode.ExtensionContext) {
  * @param resolver インクルードを解決するリゾルバ
  * @param channel 結果を表示する出力チャンネル
  */
-function runIncludeDiagnostics(
+async function runIncludeDiagnostics(
     parser: Parser,
     resolver: FileIncludeResolver,
     channel: vscode.OutputChannel
-): void {
+): Promise<void> {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
         vscode.window.showWarningMessage('アクティブなエディタがありません。');
@@ -133,7 +159,7 @@ function runIncludeDiagnostics(
 
     const entryFsPath = editor.document.uri.fsPath;
 
-    try {
+    await runWithProgress('インクルード探索を診断しています…', () => {
         const report = buildIncludeReport(entryFsPath, MAX_INCLUDE_DEPTH, {
             readIncludePaths: (fsPath) => {
                 // 解析対象ファイル自身は、未保存の変更も含めたエディタの内容を使う
@@ -154,9 +180,7 @@ function runIncludeDiagnostics(
         channel.clear();
         channel.appendLine(formatIncludeReport(report, toWorkspaceRelative));
         channel.show(true);
-    } catch (err) {
-        vscode.window.showErrorMessage(`インクルード探索の診断中にエラーが発生しました: ${err}`);
-    }
+    }, 'インクルード探索の診断中にエラーが発生しました。');
 }
 
 /**
