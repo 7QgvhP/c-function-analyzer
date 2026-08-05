@@ -1,12 +1,11 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import Parser = require('web-tree-sitter');
-import { analyzeCFunction } from './analyzer';
-import { FileIncludeResolver } from './includeResolver';
+import { analyzeCFunction, describeDefinitionSite, SourcePosition } from './analyzer';
 import { FunctionAnalyzerWebview } from './webview';
 import { parseWithModifierMacroRepair } from './macroRepair';
-import { buildIncludeReport, formatIncludeReport } from './includeDiagnostics';
-import { extractIncludePaths, listStructDefinitionNames, MAX_INCLUDE_DEPTH } from './analyzer';
+import { createExcludeFilter } from './excludePaths';
+import { DefinitionCandidate, DefinitionLookup, resolveDefinitions } from './definitionResolver';
 
 /**
  * 拡張機能がアクティベートされた際に実行されます。
@@ -38,14 +37,6 @@ export async function activate(context: vscode.ExtensionContext) {
         return;
     }
 
-    // インクルードファイルの解決を担うリゾルバ（パース結果をキャッシュするため使い回す）
-    const includeResolver = new FileIncludeResolver(parser);
-    context.subscriptions.push({ dispose: () => includeResolver.dispose() });
-
-    // 診断結果の表示先（出力パネル）
-    const diagnosticsChannel = vscode.window.createOutputChannel('C Function Analyzer');
-    context.subscriptions.push(diagnosticsChannel);
-
     // 2. コマンド 'c-function-analyzer.analyze' の登録
     const disposable = vscode.commands.registerCommand('c-function-analyzer.analyze', async () => {
         const editor = vscode.window.activeTextEditor;
@@ -63,21 +54,17 @@ export async function activate(context: vscode.ExtensionContext) {
         const document = editor.document;
         const cursorLine = editor.selection.active.line; // 0始まりの行番号
 
-        await runWithProgress('関数を解析しています…', () => {
+        await runWithProgress('関数を解析しています…', async () => {
             // ソースコード全体をパースしてASTを取得
             // （GLOBAL BYTE hoge; のような修飾子マクロ付き宣言は必要に応じて修復する）
-            const sourceCode = document.getText();
-            const tree = parseWithModifierMacroRepair(parser, sourceCode);
+            const tree = parseWithModifierMacroRepair(parser, document.getText());
 
             // VS Codeの設定からマクロ分類オプションを取得
             const config = vscode.workspace.getConfiguration('c-function-analyzer');
             const classifyAllUppercaseAsMacros = config.get<boolean>('classifyAllUppercaseAsMacros', true);
 
-            // C言語関数の簡易解析を実行（インクルードファイルも辿って型と定義位置を解決する）
-            const result = analyzeCFunction(tree, cursorLine, classifyAllUppercaseAsMacros, {
-                includeResolver,
-                currentFilePath: document.uri.toString()
-            });
+            // 現在のファイルだけで分かる範囲を解析する
+            const result = analyzeCFunction(tree, cursorLine, classifyAllUppercaseAsMacros);
 
             if (!result) {
                 // 関数定義の関数名や引数宣言がある行以外で実行された場合はインフォメーションを表示
@@ -87,6 +74,14 @@ export async function activate(context: vscode.ExtensionContext) {
                 return;
             }
 
+            // 定義位置を辿って、型名・コメント・定義値を埋める
+            const lookup = createDefinitionLookup(parser, document);
+            try {
+                await resolveDefinitions(result, lookup);
+            } finally {
+                lookup.dispose();
+            }
+
             // Webview パネルを表示して解析結果を描画
             result.filePath = document.uri.toString();
             FunctionAnalyzerWebview.show(result);
@@ -94,20 +89,118 @@ export async function activate(context: vscode.ExtensionContext) {
     });
 
     context.subscriptions.push(disposable);
+}
 
-    // 3. コマンド 'c-function-analyzer.diagnoseIncludes' の登録
-    const diagnoseDisposable = vscode.commands.registerCommand(
-        'c-function-analyzer.diagnoseIncludes',
-        async () => runIncludeDiagnostics(parser, includeResolver, diagnosticsChannel)
+/** 使い終わったASTを解放できる定義解決手段 */
+interface DisposableDefinitionLookup extends DefinitionLookup {
+    dispose(): void;
+}
+
+/**
+ * VS Code の定義プロバイダ（F12 と同じもの）を使う定義解決手段を作ります。
+ *
+ * 候補が複数返る場合（ビルド時に切り替える同名ファイルなど）は、設定 `excludePaths`
+ * に該当するものを取り除きます。残りが無ければ「定義なし」として扱います。
+ *
+ * @param parser 言語設定済みのパーサー
+ * @param document 解析対象のドキュメント（参照位置の基準）
+ * @returns 定義解決手段
+ */
+function createDefinitionLookup(
+    parser: Parser,
+    document: vscode.TextDocument
+): DisposableDefinitionLookup {
+    const folders = (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
+    const config = vscode.workspace.getConfiguration('c-function-analyzer');
+    const excludedPaths = config.get<string[]>('excludePaths', []);
+    const isExcluded = createExcludeFilter(
+        Array.isArray(excludedPaths) ? excludedPaths : [],
+        folders
     );
-    context.subscriptions.push(diagnoseDisposable);
+
+    // 同じヘッダを何度もパースしないよう、この解析中だけ結果を保持する
+    const trees = new Map<string, Parser.Tree>();
+
+    return {
+        async findDefinitions(usage: SourcePosition): Promise<DefinitionCandidate[]> {
+            const locations = await vscode.commands.executeCommand<
+                vscode.Location[] | vscode.LocationLink[] | undefined
+            >(
+                'vscode.executeDefinitionProvider',
+                document.uri,
+                new vscode.Position(usage.line, usage.column)
+            );
+            return toCandidates(locations).filter(candidate => {
+                try {
+                    return !isExcluded(vscode.Uri.parse(candidate.filePath).fsPath);
+                } catch {
+                    // URI として解釈できない候補は除外対象と判断できないため残す
+                    return true;
+                }
+            });
+        },
+
+        async describe(candidate: DefinitionCandidate) {
+            const uri = vscode.Uri.parse(candidate.filePath);
+            // 文字コードの判別は VS Code に任せる
+            const doc = await vscode.workspace.openTextDocument(uri);
+            const key = `${uri.toString()}@${doc.version}`;
+            let tree = trees.get(key);
+            if (!tree) {
+                tree = parseWithModifierMacroRepair(parser, doc.getText());
+                trees.set(key, tree);
+            }
+            return describeDefinitionSite(tree, candidate.line, candidate.column);
+        },
+
+        dispose() {
+            trees.forEach(tree => {
+                try {
+                    tree.delete();
+                } catch {
+                    // 解放に失敗しても処理は継続する
+                }
+            });
+            trees.clear();
+        }
+    };
+}
+
+/**
+ * 定義プロバイダの戻り値を、扱いやすい形へ変換します。
+ *
+ * プロバイダは `Location[]` と `LocationLink[]` のどちらでも返しうるため、双方に対応します。
+ *
+ * @param locations 定義プロバイダの戻り値
+ * @returns 定義位置の候補（返却順を保つ）
+ */
+function toCandidates(
+    locations: vscode.Location[] | vscode.LocationLink[] | undefined
+): DefinitionCandidate[] {
+    if (!locations || locations.length === 0) {
+        return [];
+    }
+
+    return locations.map(item => {
+        const link = item as vscode.LocationLink;
+        const uri = link.targetUri || (item as vscode.Location).uri;
+        // 名前そのものの範囲（targetSelectionRange）があればそちらを使う
+        const range = link.targetSelectionRange
+            || link.targetRange
+            || (item as vscode.Location).range;
+        return {
+            filePath: uri.toString(),
+            line: range.start.line,
+            column: range.start.character
+        };
+    });
 }
 
 /**
  * 処理中であることを右下の通知に表示しながら、処理を実行します。
  *
- * 解析やインクルード探索は同期処理のため、そのまま実行すると通知が描画される前に
- * 処理が始まってしまいます。重い処理の前に一度制御を返すことで、通知を先に表示します。
+ * 解析は同期処理を含むため、そのまま実行すると通知が描画される前に処理が始まって
+ * しまいます。重い処理の前に一度制御を返すことで、通知を先に表示します。
  *
  * @param title 通知に表示する文言
  * @param work 実行する処理
@@ -115,7 +208,7 @@ export async function activate(context: vscode.ExtensionContext) {
  */
 async function runWithProgress(
     title: string,
-    work: () => void,
+    work: () => Promise<void> | void,
     errorMessage: string
 ): Promise<void> {
     await vscode.window.withProgress(
@@ -124,79 +217,12 @@ async function runWithProgress(
             // 通知が描画されるよう、重い処理の前に一度制御を返す
             await new Promise(resolve => setTimeout(resolve, 0));
             try {
-                work();
+                await work();
             } catch (err) {
                 vscode.window.showErrorMessage(errorMessage);
             }
         }
     );
-}
-
-/**
- * インクルード探索の到達状況を診断し、出力パネルへ表示します。
- *
- * 「特定のシンボルだけ `(推定)` になる」原因が、深さ上限による打ち切りなのか
- * ヘッダの解決失敗なのかを切り分けるために使います。
- *
- * @param parser 言語設定済みのパーサー
- * @param resolver インクルードを解決するリゾルバ
- * @param channel 結果を表示する出力チャンネル
- */
-async function runIncludeDiagnostics(
-    parser: Parser,
-    resolver: FileIncludeResolver,
-    channel: vscode.OutputChannel
-): Promise<void> {
-    const editor = vscode.window.activeTextEditor;
-    if (!editor) {
-        vscode.window.showWarningMessage('アクティブなエディタがありません。');
-        return;
-    }
-    if (editor.document.languageId !== 'c') {
-        vscode.window.showWarningMessage('C言語のソースファイルでのみ有効です。');
-        return;
-    }
-
-    const entryFsPath = editor.document.uri.fsPath;
-
-    await runWithProgress('インクルード探索を診断しています…', () => {
-        const report = buildIncludeReport(entryFsPath, MAX_INCLUDE_DEPTH, {
-            readIncludePaths: (fsPath) => {
-                // 解析対象ファイル自身は、未保存の変更も含めたエディタの内容を使う
-                const tree = fsPath === entryFsPath
-                    ? parseWithModifierMacroRepair(parser, editor.document.getText())
-                    : resolver.getTree(fsPath);
-                return tree ? extractIncludePaths(tree.rootNode) : [];
-            },
-            inspectInclude: (includePath, fromFsPath) =>
-                resolver.inspect(includePath, vscode.Uri.file(fromFsPath).toString()),
-            readStructNames: (fsPath) => {
-                const tree = resolver.getTree(fsPath);
-                return tree ? listStructDefinitionNames(tree.rootNode) : [];
-            },
-            countIndexedFiles: () => resolver.countIndexedFiles()
-        });
-
-        channel.clear();
-        channel.appendLine(formatIncludeReport(report, toWorkspaceRelative));
-        channel.show(true);
-    }, 'インクルード探索の診断中にエラーが発生しました。');
-}
-
-/**
- * 絶対パスをワークスペースからの相対パスへ変換します（表示用）。
- *
- * ワークスペース外のパスは絶対パスのまま返します。
- *
- * @param fsPath 変換対象の絶対パス
- * @returns 表示用のパス
- */
-function toWorkspaceRelative(fsPath: string): string {
-    const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(fsPath));
-    if (!folder) {
-        return fsPath;
-    }
-    return path.relative(folder.uri.fsPath, fsPath) || path.basename(fsPath);
 }
 
 /**

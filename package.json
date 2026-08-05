@@ -2,7 +2,7 @@
   "name": "c-function-analyzer",
   "displayName": "C Function Analyzer",
   "description": "C言語の選択された関数を簡易解析し、入出力変数や呼び出し関数を別ウィンドウに表示します。",
-  "version": "2.23.2",
+  "version": "3.0.0",
   "publisher": "antigravity",
   "repository": {
     "type": "git",
@@ -15,8 +15,7 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:c-function-analyzer.analyze",
-    "onCommand:c-function-analyzer.diagnoseIncludes"
+    "onCommand:c-function-analyzer.analyze"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -24,11 +23,6 @@
       {
         "command": "c-function-analyzer.analyze",
         "title": "関数を解析 (Analyze C Function)"
-      },
-      {
-        "command": "c-function-analyzer.diagnoseIncludes",
-        "title": "インクルード探索の診断 (Diagnose Include Resolution)",
-        "category": "C Function Analyzer"
       }
     ],
     "keybindings": [
@@ -44,11 +38,6 @@
           "command": "c-function-analyzer.analyze",
           "when": "editorLangId == c",
           "group": "navigation"
-        },
-        {
-          "command": "c-function-analyzer.diagnoseIncludes",
-          "when": "editorLangId == c",
-          "group": "navigation"
         }
       ]
     },
@@ -60,28 +49,13 @@
           "default": true,
           "markdownDescription": "**定義が特定できなかった**シンボルについて、名前がすべて大文字であればマクロとみなし「マクロ変数」「マクロ関数」カテゴリに分類します。\n\n`#define` や変数・関数の宣言が見つかったシンボルは、名前の大小によらず定義に基づいて分類されるため、本設定の影響を受けません。\n\n無効にすると、定義が特定できないシンボルはすべて通常の変数・関数として分類されます。"
         },
-        "c-function-analyzer.searchWorkspaceByFileName": {
-          "type": "boolean",
-          "default": true,
-          "markdownDescription": "`#include \"...\"` がインクルード元ファイルのディレクトリとワークスペースフォルダ直下で見つからなかった場合に、ワークスペース内をファイル名で検索します。\n\nヘッダが多数のディレクトリに分散している構成でも、探索パスを設定せずに解決できます。`#include \"sub/types.h\"` のようにディレクトリを含む記述の場合は、そのディレクトリ構成を満たすファイルのみを対象とします。\n\n複数見つかった場合は階層の浅いものが採用され、解析結果に注意が表示されます。使用しない側は `excludePaths` で除外してください。\n\n`.git` などのドットで始まるディレクトリ、`node_modules`、`out` は検索対象外です。\n\n本設定を無効にすると、ワークスペース直下とインクルード元ファイルからの相対パスでしか解決できなくなります。"
-        },
-        "c-function-analyzer.fallbackEncoding": {
-          "type": "string",
-          "enum": [
-            "shift_jis",
-            "euc-jp",
-            "utf-8"
-          ],
-          "default": "shift_jis",
-          "markdownDescription": "インクルードファイルが **UTF-8 として読めなかった場合**に使用する文字コードです。\n\n読み込みは次の順で判別します。\n\n1. バイト順マーク（BOM）があればそれに従う\n2. UTF-8 として妥当ならば UTF-8（ASCII のみのファイルもここに該当）\n3. いずれでもなければ本設定の文字コード\n\nソースが Shift-JIS で保存されている場合、UTF-8 固定で読むとコメントの日本語が文字化けします。\n\n解析対象のファイル自身は VS Code が判別した内容を使うため、本設定の影響を受けません。"
-        },
         "c-function-analyzer.excludePaths": {
           "type": "array",
           "items": {
             "type": "string"
           },
           "default": [],
-          "markdownDescription": "`#include \"...\"` の探索対象から除外する場所を指定します。次の2通りの書き方ができます。\n\n**1. ディレクトリ指定**（`/` または `\\` を含む、もしくは絶対パス）\n\n指定したディレクトリの配下がすべて除外されます。相対パスはワークスペースフォルダからの相対として解決され、絶対パスはそのまま使用されます。\n\n例: `\"legacy/old_hed\"`、`\"C:/SDK/deprecated\"`\n\n**2. フォルダ名指定**（区切り文字を含まない文字列）\n\nワークスペース内で、**名前にその文字列を含むフォルダ**の配下がすべて除外されます。場所を問わず一致するため、同じ命名のフォルダが複数箇所にある場合に有効です。大文字・小文字は区別しません。\n\n例: `\"variantB\"` → `hed/variantB/`、`control/sub/variantB_old/` などの配下をすべて除外\n\n部分一致のため、意図しないフォルダに一致しないか確認してください（例: `\"old\"` は `goldmine` にも一致します）。\n\nビルド時に切り替える同名ファイルがある場合、使用しない側を指定すると、意図した定義のみが参照されます。\n\n例: `[\"variantB\", \"legacy/old_hed\"]`"
+          "markdownDescription": "**定義へのジャンプ先**から除外する場所を指定します。\n\n定義位置は VS Code の定義プロバイダ（F12 と同じもの）から取得します。ビルド時に切り替える同名ファイルがある構成では候補が複数返るため、使用しない側をここで除外してください。\n\n次の2通りの書き方ができます。\n\n**1. ディレクトリ指定**（`/` または `\\` を含む、もしくは絶対パス）\n\n指定したディレクトリの配下がすべて除外されます。相対パスはワークスペースフォルダからの相対として解決され、絶対パスはそのまま使用されます。\n\n例: `\"legacy/old_hed\"`、`\"C:/SDK/deprecated\"`\n\n**2. フォルダ名指定**（区切り文字を含まない文字列）\n\nワークスペース内で、**名前にその文字列を含むフォルダ**の配下がすべて除外されます。場所を問わず一致するため、同じ命名のフォルダが複数箇所にある場合に有効です。大文字・小文字は区別しません。\n\n例: `\"variantB\"` → `hed/variantB/`、`control/sub/variantB_old/` などの配下をすべて除外\n\n部分一致のため、意図しないフォルダに一致しないか確認してください（例: `\"old\"` は `goldmine` にも一致します）。\n\n**除外した結果、候補が1件も残らなかった場合は「定義なし」として扱われます。**"
         }
       }
     }
@@ -90,7 +64,7 @@
     "vscode:prepublish": "npm run compile",
     "compile": "node scripts/copy-wasm.js && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:web-tree-sitter --format=cjs --platform=node",
     "watch": "node scripts/copy-wasm.js && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:web-tree-sitter --format=cjs --platform=node --watch",
-    "build-test": "esbuild test/analyzer.test.ts test/highlight.test.ts test/webviewHtml.test.ts test/includeResolution.test.ts test/includePaths.test.ts test/macroRepair.test.ts test/includeDiagnostics.test.ts test/sourceEncoding.test.ts --bundle --outdir=dist-test --out-extension:.js=.cjs --external:web-tree-sitter --external:tree-sitter-wasms --format=cjs --platform=node",
+    "build-test": "esbuild test/analyzer.test.ts test/highlight.test.ts test/webviewHtml.test.ts test/macroRepair.test.ts test/excludePaths.test.ts test/definitionResolver.test.ts --bundle --outdir=dist-test --out-extension:.js=.cjs --external:web-tree-sitter --external:tree-sitter-wasms --format=cjs --platform=node",
     "typecheck": "tsc --noEmit",
     "test": "npm run typecheck && npm run build-test && node --test \"dist-test/**/*.cjs\""
   },

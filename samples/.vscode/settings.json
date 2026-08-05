@@ -1,4 +1,0 @@
-{
-  "//": "samples フォルダをワークスペースとして開いた場合の設定です。既定のままで解決できるため、設定は不要です。",
-  "c-function-analyzer.searchWorkspaceByFileName": true
-}
