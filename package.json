@@ -2,7 +2,7 @@
   "name": "c-function-analyzer",
   "displayName": "C Function Analyzer",
   "description": "C言語の選択された関数を簡易解析し、入出力変数や呼び出し関数を別ウィンドウに表示します。",
-  "version": "2.23.0",
+  "version": "2.23.1",
   "publisher": "antigravity",
   "repository": {
     "type": "git",
@@ -65,6 +65,16 @@
           "default": true,
           "markdownDescription": "`#include \"...\"` がインクルード元ファイルのディレクトリとワークスペースフォルダ直下で見つからなかった場合に、ワークスペース内をファイル名で検索します。\n\nヘッダが多数のディレクトリに分散している構成でも、探索パスを設定せずに解決できます。`#include \"sub/types.h\"` のようにディレクトリを含む記述の場合は、そのディレクトリ構成を満たすファイルのみを対象とします。\n\n複数見つかった場合は階層の浅いものが採用され、解析結果に注意が表示されます。使用しない側は `excludePaths` で除外してください。\n\n`.git` などのドットで始まるディレクトリ、`node_modules`、`out` は検索対象外です。\n\n本設定を無効にすると、ワークスペース直下とインクルード元ファイルからの相対パスでしか解決できなくなります。"
         },
+        "c-function-analyzer.fallbackEncoding": {
+          "type": "string",
+          "enum": [
+            "shift_jis",
+            "euc-jp",
+            "utf-8"
+          ],
+          "default": "shift_jis",
+          "markdownDescription": "インクルードファイルが **UTF-8 として読めなかった場合**に使用する文字コードです。\n\n読み込みは次の順で判別します。\n\n1. バイト順マーク（BOM）があればそれに従う\n2. UTF-8 として妥当ならば UTF-8（ASCII のみのファイルもここに該当）\n3. いずれでもなければ本設定の文字コード\n\nソースが Shift-JIS で保存されている場合、UTF-8 固定で読むとコメントの日本語が文字化けします。\n\n解析対象のファイル自身は VS Code が判別した内容を使うため、本設定の影響を受けません。"
+        },
         "c-function-analyzer.excludePaths": {
           "type": "array",
           "items": {
@@ -80,7 +90,7 @@
     "vscode:prepublish": "npm run compile",
     "compile": "node scripts/copy-wasm.js && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:web-tree-sitter --format=cjs --platform=node",
     "watch": "node scripts/copy-wasm.js && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:web-tree-sitter --format=cjs --platform=node --watch",
-    "build-test": "esbuild test/analyzer.test.ts test/highlight.test.ts test/webviewHtml.test.ts test/includeResolution.test.ts test/includePaths.test.ts test/macroRepair.test.ts test/includeDiagnostics.test.ts --bundle --outdir=dist-test --out-extension:.js=.cjs --external:web-tree-sitter --external:tree-sitter-wasms --format=cjs --platform=node",
+    "build-test": "esbuild test/analyzer.test.ts test/highlight.test.ts test/webviewHtml.test.ts test/includeResolution.test.ts test/includePaths.test.ts test/macroRepair.test.ts test/includeDiagnostics.test.ts test/sourceEncoding.test.ts --bundle --outdir=dist-test --out-extension:.js=.cjs --external:web-tree-sitter --external:tree-sitter-wasms --format=cjs --platform=node",
     "typecheck": "tsc --noEmit",
     "test": "npm run typecheck && npm run build-test && node --test \"dist-test/**/*.cjs\""
   },
