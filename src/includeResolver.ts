@@ -11,6 +11,7 @@ import Parser = require('web-tree-sitter');
 import { IncludeResolver, ResolvedInclude } from './analyzer';
 import { buildFileNameSearchCandidates, buildIncludeCandidates, FileNameIndex } from './includePaths';
 import { parseWithModifierMacroRepair } from './macroRepair';
+import { decodeSource, DEFAULT_FALLBACK_ENCODING } from './sourceEncoding';
 
 /** パース結果のキャッシュエントリ */
 interface CacheEntry {
@@ -316,7 +317,9 @@ export class FileIncludeResolver implements IncludeResolver {
 
         let tree: Parser.Tree;
         try {
-            const source = fs.readFileSync(fsPath, 'utf8');
+            // 文字コードを判別してから読む。UTF-8 固定で読むと、Shift-JIS で
+            // 保存されたヘッダのコメント（日本語）が文字化けするため。
+            const source = decodeSource(fs.readFileSync(fsPath), this.fallbackEncoding());
             // ヘッダ側の GLOBAL BYTE hoge; のような修飾子マクロ付き宣言も修復する
             tree = parseWithModifierMacroRepair(this.parser, source);
         } catch {
@@ -343,6 +346,17 @@ export class FileIncludeResolver implements IncludeResolver {
 
         this.cache.set(fsPath, { mtimeMs, tree });
         return tree;
+    }
+
+    /**
+     * UTF-8 として読めなかったファイルに使う文字コードを設定から取得します。
+     *
+     * @returns 設定された文字コード名
+     */
+    private fallbackEncoding(): string {
+        const config = vscode.workspace.getConfiguration('c-function-analyzer');
+        const encoding = config.get<string>('fallbackEncoding', DEFAULT_FALLBACK_ENCODING);
+        return typeof encoding === 'string' && encoding ? encoding : DEFAULT_FALLBACK_ENCODING;
     }
 
     /**
