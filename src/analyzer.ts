@@ -50,6 +50,13 @@ export interface VariableInfo {
     value?: string;
     /** 宣言の右側に書かれたコメント（説明書き）。無い場合は未設定 */
     comment?: string;
+    /**
+     * 現在のファイル内での参照位置。
+     *
+     * 定義位置を VS Code の定義プロバイダで解決する際の起点として使います。
+     * 参照位置を持たない項目（戻り値など）では未設定です。
+     */
+    usage?: SourcePosition;
 }
 
 /** インクルードファイルの解決結果 */
@@ -96,6 +103,13 @@ export interface FunctionInfo {
     value?: string;
     /** 宣言の右側に書かれたコメント（説明書き）。無い場合は未設定 */
     comment?: string;
+    /**
+     * 現在のファイル内での参照位置。
+     *
+     * 定義位置を VS Code の定義プロバイダで解決する際の起点として使います。
+     * 参照位置を持たない項目（戻り値など）では未設定です。
+     */
+    usage?: SourcePosition;
     /** 宣言・定義されている位置。特定できなかった場合は未設定 */
     definition?: DefinitionLocation;
 }
@@ -244,6 +258,20 @@ interface BodyAnalysis {
     pointerReads: Set<string>;
     /** 書き込まれているポインタ引数のアクセスパス */
     pointerWrites: Set<string>;
+    /**
+     * 各シンボルが現在のファイルで最初に現れる位置。
+     *
+     * 定義位置の解決（VS Code の定義プロバイダ呼び出し）の起点として使います。
+     * アクセスパスの場合は**最後のメンバ**の位置を記録し、`g_cfg.mode` なら
+     * `mode` の位置から直接メンバの宣言へ辿れるようにします。
+     */
+    usagePositions: Map<string, SourcePosition>;
+}
+
+/** ソース上の位置（0始まり） */
+export interface SourcePosition {
+    line: number;
+    column: number;
 }
 
 /** 宣言子（declarator）の解析結果 */
@@ -1342,52 +1370,6 @@ function collectFileScopeSymbols(
     };
 }
 
-/**
- * シンボル情報をマージします。
- *
- * 既に登録されている定義（＝解析対象ファイル自身、またはより浅いインクルード）を優先し、
- * 未登録のものだけを補います。
- *
- * @param into マージ先
- * @param from マージ元
- */
-function mergeSymbols(into: FileScopeSymbols, from: FileScopeSymbols): void {
-    from.vars.forEach((value, key) => {
-        if (!into.vars.has(key)) {
-            into.vars.set(key, value);
-        }
-    });
-    from.functions.forEach((value, key) => {
-        if (!into.functions.has(key)) {
-            into.functions.set(key, value);
-        }
-    });
-    from.macros.forEach((value, key) => {
-        if (!into.macros.has(key)) {
-            into.macros.set(key, value);
-        }
-    });
-    from.structs.forEach((value, key) => {
-        if (!into.structs.has(key)) {
-            into.structs.set(key, value);
-        }
-    });
-    from.typeAliases.forEach((value, key) => {
-        if (!into.typeAliases.has(key)) {
-            into.typeAliases.set(key, value);
-        }
-    });
-}
-
-/**
- * AST から `#include "..."` に記述されたパスを取り出します。
- *
- * `#ifdef` の内側に書かれたものも拾うため、AST 全体を走査します。
- * `#include <...>`（システムインクルード）は対象外です。
- *
- * @param rootNode ASTのルートノード
- * @returns インクルードパスの一覧（記述順）
- */
 export function extractIncludePaths(rootNode: Parser.SyntaxNode): string[] {
     const includePaths: string[] = [];
 
@@ -1423,59 +1405,6 @@ export function extractIncludePaths(rootNode: Parser.SyntaxNode): string[] {
  */
 export function listStructDefinitionNames(rootNode: Parser.SyntaxNode): string[] {
     return [...collectStructDefinitions(rootNode).keys()];
-}
-
-/**
- * フェーズ1: `#include "..."` を再帰的に辿り、インクルードファイル内のシンボルを収集します。
- *
- * システムインクルード（`#include <...>`）は対象外です。
- * 循環インクルードは解決済みファイルパスの集合で検出し、探索の深さにも上限を設けています。
- *
- * @param rootNode 走査対象のASTルートノード
- * @param resolver インクルードパスの解決を担うリゾルバ
- * @param fromFilePath 走査対象ファイルのパス（相対パス解決の起点）
- * @param into 収集先のシンボル情報
- * @param visited 既に解決したファイルパスの集合
- * @param depth 現在の探索深さ
- */
-function collectIncludedSymbols(
-    rootNode: Parser.SyntaxNode,
-    resolver: IncludeResolver,
-    fromFilePath: string | undefined,
-    into: FileScopeSymbols,
-    visited: Set<string>,
-    depth: number
-): void {
-    if (depth >= MAX_INCLUDE_DEPTH) {
-        return;
-    }
-
-    // 先にインクルードパスを集める（#ifdef 内のものも拾うため AST 全体を走査）
-    const includePaths = extractIncludePaths(rootNode);
-
-    for (const includePath of includePaths) {
-        let resolved: ResolvedInclude | null = null;
-        try {
-            resolved = resolver.resolve(includePath, fromFilePath);
-        } catch {
-            // 読み込み失敗やパースエラーは解析全体を止めず、そのインクルードのみ諦める
-            resolved = null;
-        }
-        if (!resolved || visited.has(resolved.filePath)) {
-            continue;
-        }
-        visited.add(resolved.filePath);
-
-        // 同名ファイルが複数あった場合は、このファイル由来の定義に印を付ける
-        const included = collectFileScopeSymbols(resolved.tree.rootNode, {
-            filePath: resolved.filePath,
-            ambiguous: resolved.ambiguous
-        });
-        mergeSymbols(into, included);
-
-        // さらに深いインクルードを辿る
-        collectIncludedSymbols(resolved.tree.rootNode, resolver, resolved.filePath, into, visited, depth + 1);
-    }
 }
 
 /**
@@ -1635,6 +1564,301 @@ function formatMacroType(macro?: MacroDefinition): string {
     return macro ? macro.kind : UNKNOWN_TYPE;
 }
 
+/** 定義位置にある宣言の種別 */
+export type DefinitionKind = 'macro' | 'enum' | 'function' | 'variable' | 'type' | 'unknown';
+
+/** 定義位置から読み取った宣言の情報 */
+export interface DefinitionInfo {
+    /** 宣言の種別 */
+    kind: DefinitionKind;
+    /** 型名（変数はその型、関数は戻り値の型。マクロ・列挙子は空） */
+    type: string;
+    /** 配列の各次元のサイズ（内側から順）。配列でない場合は空配列 */
+    arrayDimensions: string[];
+    /** 定義値（マクロ・列挙子のみ） */
+    value?: string;
+    /** 宣言の右側に書かれたコメント */
+    comment?: string;
+}
+
+/** 宣言の種別を判定する際に遡る対象のノード */
+const DEFINITION_NODE_TYPES = new Set([
+    'preproc_def',
+    'preproc_function_def',
+    'enumerator',
+    'function_definition',
+    'type_definition',
+    'declaration',
+    'field_declaration',
+    'parameter_declaration'
+]);
+
+/**
+ * 定義位置にある宣言を読み取り、型名・コメント・定義値を返します。
+ *
+ * VS Code の定義プロバイダ（F12）が返した位置を渡すことを想定しています。
+ * その位置を含む宣言まで遡り、種別に応じて情報を取り出します。
+ *
+ * @param tree 定義があるファイルのAST
+ * @param line 定義位置の行（0始まり）
+ * @param column 定義位置の列（0始まり）
+ * @returns 読み取った宣言の情報。判別できない場合は kind が `unknown`
+ */
+export function describeDefinitionSite(
+    tree: Parser.Tree,
+    line: number,
+    column: number
+): DefinitionInfo {
+    const unknown: DefinitionInfo = { kind: 'unknown', type: '', arrayDimensions: [] };
+
+    const nameNode = tree.rootNode.descendantForPosition({ row: line, column });
+    if (!nameNode) {
+        return unknown;
+    }
+
+    // 位置を含む宣言まで遡る
+    let declNode: Parser.SyntaxNode | null = nameNode;
+    while (declNode && !DEFINITION_NODE_TYPES.has(declNode.type)) {
+        declNode = declNode.parent;
+    }
+    if (!declNode) {
+        return unknown;
+    }
+
+    const comment = findTrailingComment(nameNode) || findTrailingComment(declNode);
+
+    // マクロ定義
+    if (declNode.type === 'preproc_def' || declNode.type === 'preproc_function_def') {
+        const valueNode = declNode.childForFieldName('value');
+        const parts = valueNode ? splitMacroValue(valueNode.text) : { value: '' };
+
+        // 型をマクロで定義している場合（`#define BYTE unsigned char`）は型として扱う。
+        // キャストが変数参照と解釈されることがあり、変数として表示すると誤解を招くため。
+        if (parts.value && isTypeMacroValue(parts.value, tree)) {
+            return { kind: 'type', type: parts.value, arrayDimensions: [], comment: parts.comment || comment };
+        }
+
+        return {
+            kind: 'macro',
+            type: '',
+            arrayDimensions: [],
+            value: parts.value || undefined,
+            comment: parts.comment || comment
+        };
+    }
+
+    // enum の列挙子
+    if (declNode.type === 'enumerator') {
+        return {
+            kind: 'enum',
+            type: '',
+            arrayDimensions: [],
+            value: describeEnumeratorValue(declNode),
+            comment
+        };
+    }
+
+    // typedef（型名そのもの）
+    if (declNode.type === 'type_definition') {
+        const typeNode = declNode.childForFieldName('type');
+        return {
+            kind: 'type',
+            type: typeNode ? cleanTypeText(typeNode.text) : '',
+            arrayDimensions: [],
+            comment
+        };
+    }
+
+    // 関数定義
+    if (declNode.type === 'function_definition') {
+        const declaratorNode = declNode.childForFieldName('declarator');
+        const info = declaratorNode ? resolveDeclarator(declaratorNode) : null;
+        return {
+            kind: 'function',
+            type: declaratorNode
+                ? extractReturnType(declNode, declaratorNode, info ? info.pointerDepth : 0)
+                : '',
+            arrayDimensions: [],
+            comment
+        };
+    }
+
+    // 変数宣言・構造体メンバ・引数・関数プロトタイプ宣言
+    return describeDeclaration(declNode, nameNode, comment);
+}
+
+/**
+ * マクロの定義値が型指定子だけで構成されているかを判定します。
+ *
+ * `#define BYTE U8` のように別のマクロや `typedef` を参照している場合に備え、
+ * **同じファイル内**の定義を1段階だけ辿ります。
+ *
+ * @param value マクロの定義値
+ * @param tree 定義があるファイルのAST
+ * @param visited 参照済みの名前（循環の停止用）
+ * @returns 型指定子だけで構成されていれば true
+ */
+function isTypeMacroValue(
+    value: string,
+    tree: Parser.Tree,
+    visited: Set<string> = new Set()
+): boolean {
+    // ポインタのアスタリスクは区切りとして扱う
+    const tokens = value.replace(/\*/g, ' ').trim().split(/\s+/).filter(t => t.length > 0);
+    if (tokens.length === 0) {
+        return false;
+    }
+
+    let expectTag = false;
+    let hasTypeKeyword = false;
+    const names: string[] = [];
+
+    for (const token of tokens) {
+        if (expectTag) {
+            if (!/^[A-Za-z_]\w*$/.test(token)) {
+                return false;
+            }
+            expectTag = false;
+            continue;
+        }
+        if (TAG_KEYWORDS.has(token)) {
+            expectTag = true;
+            hasTypeKeyword = true;
+            continue;
+        }
+        if (TYPE_KEYWORDS.has(token)) {
+            hasTypeKeyword = true;
+            continue;
+        }
+        if (!/^[A-Za-z_]\w*$/.test(token)) {
+            return false;
+        }
+        names.push(token);
+    }
+    if (expectTag) {
+        return false;
+    }
+    // 型キーワードだけで構成されていれば型とみなす
+    if (hasTypeKeyword && names.length === 0) {
+        return true;
+    }
+    // 識別子のみの場合は、同じファイル内の typedef / 型マクロを辿って判定する
+    return names.length > 0 && names.every(name => isTypeNameInFile(name, tree, visited));
+}
+
+/**
+ * 名前が、同じファイル内で型として定義されているかを判定します。
+ *
+ * @param name 判定する名前
+ * @param tree 定義があるファイルのAST
+ * @param visited 参照済みの名前（循環の停止用）
+ * @returns `typedef` の別名、または型を表すマクロであれば true
+ */
+function isTypeNameInFile(name: string, tree: Parser.Tree, visited: Set<string>): boolean {
+    if (visited.has(name)) {
+        return false;
+    }
+    visited.add(name);
+
+    if (collectTypeAliases(tree.rootNode).has(name)) {
+        return true;
+    }
+    const macro = collectMacros(tree.rootNode).get(name);
+    if (macro && macro.kind === 'macro' && macro.value) {
+        return isTypeMacroValue(macro.value, tree, visited);
+    }
+    return false;
+}
+
+/**
+ * 宣言ノードから、指定された名前に対応する型情報を取り出します。
+ *
+ * カンマ区切りで複数宣言されている場合に備え、名前が一致する宣言子を選びます。
+ *
+ * @param declNode 宣言ノード
+ * @param nameNode 定義位置にあるノード（名前の識別子）
+ * @param comment 宣言の右側に書かれたコメント
+ * @returns 読み取った宣言の情報
+ */
+function describeDeclaration(
+    declNode: Parser.SyntaxNode,
+    nameNode: Parser.SyntaxNode,
+    comment?: string
+): DefinitionInfo {
+    const typeNode = declNode.childForFieldName('type') || declNode.child(0);
+    const typeText = typeNode ? cleanTypeText(typeNode.text) : '';
+
+    for (let i = 0; i < declNode.childCount; i++) {
+        const child = declNode.child(i)!;
+        if (isSameNode(child, typeNode) || child.type === ',' || child.type === ';') {
+            continue;
+        }
+        const decl = child.type === 'init_declarator'
+            ? (child.childForFieldName('declarator') || child.child(0)!)
+            : child;
+        const info = resolveDeclarator(decl);
+        if (!info.name || info.name !== nameNode.text) {
+            continue;
+        }
+
+        // 関数プロトタイプ宣言は戻り値の型を返す
+        if (info.ownerFunctionDeclarator && !info.isFunctionPointer) {
+            return {
+                kind: 'function',
+                type: extractReturnType(declNode, decl, info.pointerDepth),
+                arrayDimensions: [],
+                comment
+            };
+        }
+        return {
+            kind: 'variable',
+            type: typeText + (info.pointerDepth > 0 ? '*' : ''),
+            arrayDimensions: info.arrayDimensions,
+            comment
+        };
+    }
+
+    // 宣言子を特定できない場合は型名だけ返す
+    return { kind: 'variable', type: typeText, arrayDimensions: [], comment };
+}
+
+/**
+ * 列挙子の値を求めます。
+ *
+ * 値が省略されている場合は、同じ `enum` 内の直前の値から算出します。
+ *
+ * @param enumeratorNode enumerator ノード
+ * @returns 表示用の定義値
+ */
+function describeEnumeratorValue(enumeratorNode: Parser.SyntaxNode): string | undefined {
+    const list = enumeratorNode.parent;
+    if (!list || list.type !== 'enumerator_list') {
+        const valueNode = enumeratorNode.childForFieldName('value');
+        return valueNode ? collapseSpaces(valueNode.text) : undefined;
+    }
+
+    // 先頭から順に値を求め、対象の列挙子に到達した時点の値を返す
+    let previousValue = '-1';
+    let offset = 0;
+    for (let i = 0; i < list.childCount; i++) {
+        const child = list.child(i)!;
+        if (child.type !== 'enumerator') {
+            continue;
+        }
+        const valueNode = child.childForFieldName('value');
+        if (valueNode) {
+            previousValue = collapseSpaces(valueNode.text);
+            offset = 0;
+        } else {
+            offset++;
+        }
+        if (isSameNode(child, enumeratorNode)) {
+            return formatEnumeratorValue(previousValue, offset);
+        }
+    }
+    return undefined;
+}
+
 /**
  * フェーズ2: カーソル行にある関数定義を同定します。
  *
@@ -1748,6 +1972,65 @@ function parseSignature(funcNode: Parser.SyntaxNode): SignatureInfo {
 }
 
 /**
+ * アクセス式のうち、定義位置の解決に使うノードを返します。
+ *
+ * `g_cfg.mode` は `mode`、`g_tbl[0].value` は `value` のように**最後のメンバ**を
+ * 対象とします。そこから定義を辿ることで、メンバの宣言へ直接到達できます。
+ *
+ * @param node アクセス式の最も外側のノード
+ * @returns 定義位置の解決に使うノード
+ */
+function accessTargetNode(node: Parser.SyntaxNode): Parser.SyntaxNode {
+    if (node.type === 'field_expression') {
+        return node.childForFieldName('field') || node;
+    }
+    if (node.type === 'subscript_expression') {
+        const argument = node.childForFieldName('argument');
+        return argument ? accessTargetNode(argument) : node;
+    }
+    // デリファレンス（`*p`）や括弧（`(*p)`）は記号を指してしまうため、内側へ降りる
+    if (node.type === 'pointer_expression' || node.type === 'parenthesized_expression') {
+        const inner = node.childForFieldName('argument') || findFirstIdentifierChild(node);
+        return inner ? accessTargetNode(inner) : node;
+    }
+    return node;
+}
+
+/**
+ * ノードの子から、最初の識別子を含む要素を返します。
+ *
+ * @param node 対象ノード
+ * @returns 見つかった子ノード。無い場合は null
+ */
+function findFirstIdentifierChild(node: Parser.SyntaxNode): Parser.SyntaxNode | null {
+    for (let i = 0; i < node.childCount; i++) {
+        const child = node.child(i)!;
+        if (child.type !== '(' && child.type !== ')' && child.type !== '*' && child.type !== '&') {
+            return child;
+        }
+    }
+    return null;
+}
+
+/**
+ * シンボルの参照位置を記録します（同じ名前では最初の位置を残します）。
+ *
+ * @param into 記録先
+ * @param name シンボル名またはアクセスパス
+ * @param node 位置を取り出すノード
+ */
+function rememberUsage(
+    into: Map<string, SourcePosition>,
+    name: string,
+    node: Parser.SyntaxNode
+): void {
+    if (into.has(name)) {
+        return;
+    }
+    into.set(name, { line: node.startPosition.row, column: node.startPosition.column });
+}
+
+/**
  * フェーズ4: 関数ボディを走査し、変数の宣言・参照・書き込み、および関数呼び出しを収集します。
  *
  * @param bodyNode 関数ボディ (compound_statement) ノード。存在しない場合は null
@@ -1773,6 +2056,9 @@ function analyzeBody(
     // ポインタ引数の読み取り状況を追跡する
     const pointerReads = new Set<string>();
 
+    // 定義位置の解決に使う、各シンボルの参照位置
+    const usagePositions = new Map<string, SourcePosition>();
+
     if (bodyNode) {
         // ---- パス1: 宣言と関数呼び出しの収集 ----
         // 読み書きの分類（パス2）はローカル変数と呼び出し関数の一覧が確定している必要があるため、
@@ -1789,6 +2075,7 @@ function analyzeBody(
                 // 直接の識別子呼び出し（関数ポインタ経由でないもの）
                 if (funcNameNode && funcNameNode.type === 'identifier') {
                     calledFunctionsSet.add(funcNameNode.text);
+                    rememberUsage(usagePositions, funcNameNode.text, funcNameNode);
                 }
             }
         });
@@ -1808,12 +2095,12 @@ function analyzeBody(
             // 代入式: result = value など
             if (node.type === 'assignment_expression') {
                 const leftNode = node.childForFieldName('left') || node.child(0)!;
-                checkLhsWrites(leftNode, params, localVars, pointerWrites, globalVarWrites);
+                checkLhsWrites(leftNode, params, localVars, pointerWrites, globalVarWrites, usagePositions);
             }
             // インクリメント・デクリメント式: i++ や --p など
             if (node.type === 'update_expression') {
                 const argumentNode = node.childForFieldName('argument') || node.child(0)!;
-                checkLhsWrites(argumentNode, params, localVars, pointerWrites, globalVarWrites);
+                checkLhsWrites(argumentNode, params, localVars, pointerWrites, globalVarWrites, usagePositions);
             }
 
             // D. 識別子 (identifier) が出現した際の、入力（読み取り）グローバル変数の候補判定
@@ -1839,10 +2126,14 @@ function analyzeBody(
                     const rootName = resolved ? resolved.rootName : name;
 
                     // ポインタ引数の読み取りをチェック
+                    // 定義位置の解決は、アクセスパスの最後のメンバから辿る
+                    const targetNode = accessTargetNode(outerNode);
+
                     const targetParam = params.find(p => p.name === rootName);
                     if (targetParam && targetParam.isPointer) {
                         if (!isLhsNode(node)) {
                             pointerReads.add(accessPath);
+                            rememberUsage(usagePositions, accessPath, targetNode);
                         }
                     }
 
@@ -1860,6 +2151,7 @@ function analyzeBody(
                         // 代入式の左辺として既に書き込み判定されていなければ、読み取り（入力）とみなす
                         if (!isLhsNode(node)) {
                             globalVarReads.add(accessPath);
+                            rememberUsage(usagePositions, accessPath, targetNode);
                         }
                     }
                 }
@@ -1870,6 +2162,7 @@ function analyzeBody(
     return {
         localVars,
         calledFunctions: calledFunctionsSet,
+        usagePositions,
         globalVarReads,
         globalVarWrites,
         pointerReads,
@@ -1895,7 +2188,10 @@ function buildResult(
     classifyAllUppercaseAsMacros: boolean
 ): AnalysisResult {
     const { functionName, returnType, params } = signature;
-    const { localVars, calledFunctions, globalVarReads, globalVarWrites, pointerReads, pointerWrites } = body;
+    const {
+        localVars, calledFunctions, usagePositions,
+        globalVarReads, globalVarWrites, pointerReads, pointerWrites
+    } = body;
 
     const inputs: VariableInfo[] = [];
     const outputs: VariableInfo[] = [];
@@ -1912,7 +2208,7 @@ function buildResult(
         if (!symbols.functions.has(func) && typeNames.has(func)) {
             return;
         }
-        const info: FunctionInfo = { name: func };
+        const info: FunctionInfo = { name: func, usage: usagePositions.get(func) };
         // 関数定義・プロトタイプ宣言、またはマクロ定義があれば、その位置をジャンプ先として持たせる
         const macro = symbols.macros.get(func);
         const declared = symbols.functions.get(func);
@@ -1968,7 +2264,8 @@ function buildResult(
                         type: resolvedPath.type,
                         details: '出力引数（ポインタ書き込みあり）',
                         definition: resolvedPath.definition,
-                        comment: resolvedPath.comment
+                        comment: resolvedPath.comment,
+                        usage: usagePositions.get(path)
                     });
                 });
             }
@@ -1981,7 +2278,8 @@ function buildResult(
                         type: resolvedPath.type,
                         details: '入力引数（ポインタ読み取りあり）',
                         definition: resolvedPath.definition,
-                        comment: resolvedPath.comment
+                        comment: resolvedPath.comment,
+                        usage: usagePositions.get(path)
                     });
                 });
             }
@@ -2051,7 +2349,8 @@ function buildResult(
                 const entry: VariableInfo = {
                     name: path,
                     type: formatMacroType(macro),
-                    details: macroDetails
+                    details: macroDetails,
+                    usage: usagePositions.get(path)
                 };
                 if (macro) {
                     entry.definition = macro.definition;
@@ -2074,10 +2373,16 @@ function buildResult(
                         type: resolvedPath.type,
                         details,
                         definition: resolvedPath.definition,
-                        comment: resolvedPath.comment
+                        comment: resolvedPath.comment,
+                        usage: usagePositions.get(path)
                     });
                 } else {
-                    target.push({ name: path, type: UNKNOWN_TYPE, details });
+                    target.push({
+                        name: path,
+                        type: UNKNOWN_TYPE,
+                        details,
+                        usage: usagePositions.get(path)
+                    });
                 }
             }
         });
@@ -2116,43 +2421,30 @@ function buildResult(
  * C言語コードを解析し、カーソル行にある関数情報を抽出します。
  *
  * 解析は以下の5フェーズで構成されます（詳細は docs/analysis_spec.md を参照）。
- *   1. ファイルスコープのシンボル収集 (collectFileScopeSymbols / collectIncludedSymbols)
+ *   1. ファイルスコープのシンボル収集 (collectFileScopeSymbols)
  *   2. カーソル位置の関数同定         (findFunctionAtCursor)
  *   3. 関数シグネチャの解析           (parseSignature)
  *   4. 関数ボディの走査               (analyzeBody)
  *   5. 解析結果の分類・統合           (buildResult)
  *
+ * ここで扱うのは**解析対象ファイルの中だけで分かる情報**です。他ファイルで宣言された
+ * シンボルの型・コメント・定義位置は、各項目に記録した参照位置（`usage`）をもとに
+ * `definitionResolver.ts` が VS Code の定義プロバイダ経由で補います。
+ *
  * @param tree 解析対象のASTツリー
  * @param cursorLine ユーザーがカーソルを置いている行（0始まり）
  * @param classifyAllUppercaseAsMacros 大文字のみの識別子をマクロとして分類するか
- * @param options インクルード探索の設定。省略した場合は解析対象ファイル内のみを参照します
  * @returns 解析結果、またはカーソルが関数名部分にない場合は null
  */
 export function analyzeCFunction(
     tree: Parser.Tree,
     cursorLine: number,
-    classifyAllUppercaseAsMacros: boolean = true,
-    options?: {
-        /** `#include "..."` を解決するリゾルバ */
-        includeResolver?: IncludeResolver;
-        /** 解析対象ファイルのパス（相対インクルードの解決起点） */
-        currentFilePath?: string;
-    }
+    classifyAllUppercaseAsMacros: boolean = true
 ): AnalysisResult | null {
     const rootNode = tree.rootNode;
 
-    // 解析対象ファイル自身のシンボルを先に収集し、インクルード側は不足分のみを補う
+    // 解析対象ファイル自身のシンボルを収集する
     const symbols = collectFileScopeSymbols(rootNode);
-    if (options && options.includeResolver) {
-        collectIncludedSymbols(
-            rootNode,
-            options.includeResolver,
-            options.currentFilePath,
-            symbols,
-            new Set<string>(),
-            0
-        );
-    }
 
     const funcNode = findFunctionAtCursor(rootNode, cursorLine);
     if (!funcNode) {
@@ -2264,7 +2556,8 @@ function checkLhsWrites(
     params: ParamInfo[],
     localVars: Map<string, DeclaredVar>,
     pointerWrites: Set<string>,
-    globalVarWrites: Set<string>
+    globalVarWrites: Set<string>,
+    usagePositions: Map<string, SourcePosition>
 ) {
     const resolved = resolveLhsVariable(node);
     if (!resolved) {
@@ -2272,12 +2565,15 @@ function checkLhsWrites(
     }
 
     const { rootName, path, isPointerWrite } = resolved;
+    // 定義位置の解決は、アクセスパスの最後のメンバから辿る
+    const targetNode = accessTargetNode(node);
 
     const param = params.find(p => p.name === rootName);
     if (param) {
         // 引数の場合: ポインタ/配列引数であり、かつデレファレンス（*, ->, []）を伴う書き込みであれば追加
         if (param.isPointer && isPointerWrite) {
             pointerWrites.add(path);
+            rememberUsage(usagePositions, path, targetNode);
         }
     } else {
         // 引数以外（＝グローバル変数、またはローカル変数）の場合:
@@ -2285,6 +2581,7 @@ function checkLhsWrites(
         // ローカル変数でも除外リストでもない場合のみ、グローバル変数への書き込み（出力）とする
         if (!isLocal && !EXCLUDE_LIST.has(rootName)) {
             globalVarWrites.add(path);
+            rememberUsage(usagePositions, path, targetNode);
         }
     }
 }
