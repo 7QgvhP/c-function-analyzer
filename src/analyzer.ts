@@ -837,19 +837,36 @@ function collectFileScopeFunctions(
     return functions;
 }
 
+/** マクロの定義値を、値の部分と末尾のコメントに分けた結果 */
+interface MacroValueParts {
+    /** 表示用の定義値（コメントを除き、空白を正規化したもの） */
+    value: string;
+    /** 値の末尾に書かれていたコメント（記号を除いたもの）。無い場合は undefined */
+    comment?: string;
+}
+
 /**
- * マクロの定義値を表示用に整えます。
+ * マクロの定義値を、値の部分と末尾のコメントへ分けます。
  *
- * `#define` の値は行末までの生テキストとして取得されるため、末尾に書かれた
- * 行コメントが値に含まれてしまいます。これを取り除いてから空白を正規化します。
+ * `#define` の値は**行末までの生テキスト**として取得されるため、末尾に書かれた
+ * 行コメントが値に含まれてしまいます。
+ *
+ * ```
+ * preproc_def
+ *   identifier   |LIMIT|
+ *   preproc_arg  |100    // 上限値|    ← 行コメントが値に取り込まれる
+ * ```
+ *
+ * ブロックコメントは独立した `comment` ノードになるため `findTrailingComment` で
+ * 取得できますが、行コメントは独立したノードにならないためここで取り出します。
  *
  * 文字列リテラル・文字リテラルの内側にある `//`（`"http://..."` など）は
  * コメントではないため、リテラルの内外を判定しながら走査します。
  *
  * @param text 定義値の生テキスト
- * @returns コメントを除去し空白を正規化した定義値
+ * @returns 値の部分と、末尾に書かれていたコメント
  */
-function normalizeMacroValue(text: string): string {
+function splitMacroValue(text: string): MacroValueParts {
     let inString = false;
     let inChar = false;
     let commentStart = -1;
@@ -886,8 +903,15 @@ function normalizeMacroValue(text: string): string {
         }
     }
 
-    const withoutComment = commentStart >= 0 ? text.substring(0, commentStart) : text;
-    return withoutComment.replace(/\s+/g, ' ').trim();
+    if (commentStart < 0) {
+        return { value: collapseSpaces(text) };
+    }
+
+    const comment = normalizeComment(text.substring(commentStart).trim());
+    return {
+        value: collapseSpaces(text.substring(0, commentStart)),
+        comment: comment || undefined
+    };
 }
 
 /**
@@ -915,11 +939,13 @@ function collectMacros(
             return;
         }
         const valueNode = node.childForFieldName('value');
+        const parts: MacroValueParts = valueNode ? splitMacroValue(valueNode.text) : { value: '' };
         macros.set(nameNode.text, {
-            value: valueNode ? normalizeMacroValue(valueNode.text) : '',
+            value: parts.value,
             definition: toDefinitionLocation(nameNode, origin),
             kind: 'macro',
-            comment: findTrailingComment(nameNode)
+            // 行コメントは値に取り込まれるため、そちらを優先して使う
+            comment: parts.comment || findTrailingComment(nameNode)
         });
     });
 
