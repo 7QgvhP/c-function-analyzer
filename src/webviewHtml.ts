@@ -218,7 +218,7 @@ function renderSection(modifier: string, title: string, count: number, body: str
  * コピー時の出力形式です。
  *
  * - `name`: 変数名のみ（1行1件）
- * - `typeAndName`: 型名とタブ区切りで変数名（表計算ソフトで2列になる）
+ * - `typeAndName`: 型名・変数名・定義値・コメントをタブ区切り（表計算ソフトで複数列になる）
  */
 export type CopyFormat = 'name' | 'typeAndName';
 
@@ -243,7 +243,7 @@ function renderCopyFormatSelector(copyFormat: CopyFormat): string {
         <div class="copy-format" role="group" aria-label="コピー形式">
             <span class="copy-format-label">コピー形式</span>
             ${option('name', '変数名')}
-            ${option('typeAndName', '型名 + 変数名')}
+            ${option('typeAndName', '型名 + 変数名 + コメント')}
         </div>`;
 }
 
@@ -351,23 +351,31 @@ ${macroFunctions.length > 0 ? renderSection('macro-fn', 'マクロ関数', macro
 
         /**
          * 対象の項目からコピー用の文字列を組み立てます。
-         * 変数と変数は改行で区切り、型名を含める場合はタブで区切ります
+         * 項目と項目は改行で区切り、型名を含める場合はタブで区切ります
          * （表計算ソフトへ貼り付けると1行1件・複数列になります）。
-         * 定義値を持つ項目（マクロ）は、3列目に定義値を出します。
+         *
+         * 列の並びは 型名／変数名／定義値／コメント です。定義値・コメントの列は、
+         * コピー対象の中に1件でも持つ項目があれば全行に出します（一部の行だけ
+         * 列が欠けると、表計算ソフトへ貼り付けたときに列がずれるためです）。
          */
         function buildCopyText(items) {
+            if (copyFormat !== 'typeAndName') {
+                return items.map(item => item.getAttribute('data-name') || '').join('\\n');
+            }
+
+            const hasValue = items.some(item => item.getAttribute('data-value'));
+            const hasComment = items.some(item => item.getAttribute('data-comment'));
+
             return items.map(item => {
-                const name = item.getAttribute('data-name') || '';
-                if (copyFormat !== 'typeAndName') {
-                    return name;
+                const columns = [
+                    item.getAttribute('data-type') || '',
+                    item.getAttribute('data-name') || ''
+                ];
+                if (hasValue) {
+                    columns.push(item.getAttribute('data-value') || '');
                 }
-                const type = item.getAttribute('data-type') || '';
-                const value = item.getAttribute('data-value') || '';
-                const comment = item.getAttribute('data-comment') || '';
-                // 定義値を持つ項目は 4 列、それ以外は 3 列になる
-                const columns = value ? [type, name, value] : [type, name];
-                if (comment) {
-                    columns.push(comment);
+                if (hasComment) {
+                    columns.push(item.getAttribute('data-comment') || '');
                 }
                 return columns.join('\\t');
             }).join('\\n');
