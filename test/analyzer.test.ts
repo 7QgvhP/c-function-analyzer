@@ -2241,3 +2241,50 @@ void work(void) {
         assert.equal(item?.comment, undefined);
     });
 });
+
+describe('アクセスパスのセグメント位置', () => {
+    test('多段アクセスは、各セグメントの位置を記録する (v3.0.1)', async () => {
+        const r = await analyzeOrThrow(`
+struct Item { int value; };
+struct Item g_tbl[8];
+
+void work(void) {
+    g_tbl[0].value = 1;
+}
+`, 'void work(');
+        const item = r.outputs.find(v => v.name === 'g_tbl[8].value');
+        assert.ok(item, 'g_tbl[8].value が出力変数にあること');
+        assert.equal(item?.segments?.length, 2, 'g_tbl と value の2つを記録すること');
+        // 1つ目は g_tbl、2つ目は value（= 参照位置と同じ）
+        assert.deepEqual(item?.segments?.[0], { line: 5, column: 4 });
+        assert.deepEqual(item?.segments?.[1], item?.usage);
+    });
+
+    test('単一の変数でも、セグメント位置を記録する (v3.0.1)', async () => {
+        const r = await analyzeOrThrow(`
+int g_flat[16];
+
+void work(void) {
+    g_flat[3] = 4;
+}
+`, 'void work(');
+        const item = r.outputs.find(v => v.name === 'g_flat[16]');
+        assert.equal(item?.segments?.length, 1);
+        assert.deepEqual(item?.segments?.[0], item?.usage);
+    });
+
+    test('読み出しでもセグメント位置を記録する (v3.0.1)', async () => {
+        const r = await analyzeOrThrow(`
+struct Item { int value; };
+struct Item g_tbl[8];
+int a;
+
+void work(void) {
+    a = g_tbl[0].value;
+}
+`, 'void work(');
+        const item = r.inputs.find(v => v.name === 'g_tbl[8].value');
+        assert.equal(item?.segments?.length, 2);
+        assert.deepEqual(item?.segments?.[0], { line: 6, column: 8 });
+    });
+});

@@ -143,6 +143,62 @@ describe('resolveDefinitions: 配列の次元', () => {
         assert.equal(result.outputs[0].type, 'int');
     });
 
+    test('メンバへのアクセスでは、途中のセグメントの次元もそのセグメントの宣言から埋める', async () => {
+        const result = makeResult({
+            outputs: [{
+                name: 'g_tbl[].value',
+                type: '(推定)',
+                details: '',
+                usage: { line: 2, column: 13 },
+                segments: [{ line: 1, column: 4 }, { line: 2, column: 13 }]
+            }]
+        });
+        await resolveDefinitions(result, makeLookup({
+            1: { info: { kind: 'variable', type: 'struct Item', arrayDimensions: ['N'] } },
+            2: { info: { kind: 'variable', type: 'int', arrayDimensions: [] } }
+        }));
+
+        assert.equal(result.outputs[0].name, 'g_tbl[N].value');
+        // 型名はあくまで最後のセグメント（メンバ）のもの
+        assert.equal(result.outputs[0].type, 'int');
+    });
+
+    test('メンバ自身が配列の場合は、両方のセグメントの次元を埋める', async () => {
+        const result = makeResult({
+            outputs: [{
+                name: 'g_tbl[].sub[]',
+                type: '(推定)',
+                details: '',
+                usage: { line: 2, column: 13 },
+                segments: [{ line: 1, column: 4 }, { line: 2, column: 13 }]
+            }]
+        });
+        await resolveDefinitions(result, makeLookup({
+            1: { info: { kind: 'variable', type: 'struct Item', arrayDimensions: ['N'] } },
+            2: { info: { kind: 'variable', type: 'int', arrayDimensions: ['4'] } }
+        }));
+
+        assert.equal(result.outputs[0].name, 'g_tbl[N].sub[4]');
+        assert.equal(result.outputs[0].type, 'int');
+    });
+
+    test('途中のセグメントの定義が見つからない場合は、そのセグメントだけ次元なしのままにする', async () => {
+        const result = makeResult({
+            outputs: [{
+                name: 'g_tbl[].sub[]',
+                type: '(推定)',
+                details: '',
+                usage: { line: 2, column: 13 },
+                segments: [{ line: 1, column: 4 }, { line: 2, column: 13 }]
+            }]
+        });
+        await resolveDefinitions(result, makeLookup({
+            2: { info: { kind: 'variable', type: 'int', arrayDimensions: ['4'] } }
+        }));
+
+        assert.equal(result.outputs[0].name, 'g_tbl[].sub[4]');
+    });
+
     test('添字なしで参照されている場合は型名側へ次元を出す', async () => {
         const result = makeResult({
             inputs: [{ name: 'g_tbl', type: '(推定)', details: '', usage: { line: 1, column: 4 } }]

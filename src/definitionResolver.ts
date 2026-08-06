@@ -133,6 +133,76 @@ async function applyToVariable(
     }
 
     applyVariableType(item, info);
+    await applyArrayDimensions(item, info, lookup);
+}
+
+/**
+ * アクセスパスの各セグメントに、宣言された配列の次元を反映します。
+ *
+ * 次元はセグメントごとに宣言が異なるため（`g_tbl[].member` の `[]` は `g_tbl` の次元）、
+ * `[]` が残っているセグメントについて、そのセグメントの定義を個別に辿ります。
+ *
+ * @param item 対象の項目
+ * @param lastInfo 最後のセグメントについて解決済みの情報（再取得を避けるために使う）
+ * @param lookup 定義位置の解決手段
+ */
+async function applyArrayDimensions(
+    item: VariableInfo,
+    lastInfo: DefinitionInfo,
+    lookup: DefinitionLookup
+): Promise<void> {
+    // 区切り文字（. と ->）を保持したまま分割する
+    const parts = item.name.split(/(\.|->)/);
+
+    // 単一セグメントであれば、参照位置がそのままそのセグメントの位置になる
+    const positions = item.segments && item.segments.length > 0
+        ? item.segments
+        : (parts.length === 1 && item.usage ? [item.usage] : undefined);
+    if (!positions) {
+        return;
+    }
+
+    let segmentIndex = 0;
+    let changed = false;
+
+    for (let i = 0; i < parts.length; i += 2) {
+        const segment = parts[i];
+        const position = positions[segmentIndex];
+        segmentIndex++;
+
+        // 次元が未確定（`[]` のまま）のセグメントだけを対象とする
+        if (!segment.endsWith('[]') || !position) {
+            continue;
+        }
+
+        const isLast = i + 2 >= parts.length;
+        const info = isLast ? lastInfo : await describeAt(position, lookup);
+        if (!info || info.arrayDimensions.length === 0) {
+            continue;
+        }
+
+        parts[i] = segment.slice(0, -2) + info.arrayDimensions.map(d => `[${d}]`).join('');
+        changed = true;
+    }
+
+    if (changed) {
+        item.name = parts.join('');
+    }
+}
+
+/**
+ * 参照位置の定義を辿り、宣言情報を返します。
+ *
+ * @param position 参照位置
+ * @param lookup 定義位置の解決手段
+ * @returns 宣言情報。解決できない場合は null
+ */
+async function describeAt(
+    position: SourcePosition,
+    lookup: DefinitionLookup
+): Promise<DefinitionInfo | null> {
+    const resolved = await resolve(position, lookup);
+    return resolved ? resolved.info : null;
 }
 
 /**
@@ -149,9 +219,8 @@ function applyVariableType(item: VariableInfo, info: DefinitionInfo): void {
     }
 
     const dimensions = info.arrayDimensions;
+    // 添字でアクセスされている場合、次元は名前側へ出す（反映は applyArrayDimensions が行う）
     if (dimensions.length > 0 && item.name.endsWith('[]')) {
-        // 添字でアクセスされている場合は、宣言された次元を名前側へ反映する
-        item.name = item.name.slice(0, -2) + dimensions.map(d => `[${d}]`).join('');
         item.type = info.type;
         return;
     }
