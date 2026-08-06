@@ -57,6 +57,13 @@ export interface VariableInfo {
      * 参照位置を持たない項目（戻り値など）では未設定です。
      */
     usage?: SourcePosition;
+    /**
+     * アクセスパスの各セグメントの参照位置（根元から順）。
+     *
+     * 配列の次元はセグメントごとに宣言が異なるため、`g_tbl[].member` の `g_tbl` の
+     * 次元を埋めるのに使います。
+     */
+    segments?: SourcePosition[];
 }
 
 /** インクルードファイルの解決結果 */
@@ -266,6 +273,13 @@ interface BodyAnalysis {
      * `mode` の位置から直接メンバの宣言へ辿れるようにします。
      */
     usagePositions: Map<string, SourcePosition>;
+    /**
+     * アクセスパスの各セグメントの位置（根元から順）。
+     *
+     * 配列の次元はセグメントごとに宣言が異なるため、`g_tbl[].member` の `g_tbl` の
+     * 次元を埋めるには、そのセグメントの定義を別途辿る必要があります。
+     */
+    segmentPositions: Map<string, SourcePosition[]>;
 }
 
 /** ソース上の位置（0始まり） */
@@ -2013,6 +2027,56 @@ function findFirstIdentifierChild(node: Parser.SyntaxNode): Parser.SyntaxNode | 
 }
 
 /**
+ * アクセス式を構成する各セグメントの識別子ノードを、記述順に返します。
+ *
+ * `g_tbl[0].member` なら `[g_tbl, member]` を返します。配列の次元は
+ * **そのセグメント自身の宣言**から得る必要があるため、セグメントごとの位置が要ります。
+ *
+ * @param node アクセス式の最も外側のノード
+ * @returns 各セグメントの識別子ノード（根元から順）
+ */
+function accessSegmentNodes(node: Parser.SyntaxNode): Parser.SyntaxNode[] {
+    if (node.type === 'field_expression') {
+        const base = node.childForFieldName('argument');
+        const field = node.childForFieldName('field');
+        return [...(base ? accessSegmentNodes(base) : []), ...(field ? [field] : [])];
+    }
+    if (node.type === 'subscript_expression') {
+        const argument = node.childForFieldName('argument');
+        return argument ? accessSegmentNodes(argument) : [];
+    }
+    if (node.type === 'pointer_expression' || node.type === 'parenthesized_expression') {
+        const inner = node.childForFieldName('argument') || findFirstIdentifierChild(node);
+        return inner ? accessSegmentNodes(inner) : [];
+    }
+    return [node];
+}
+
+/**
+ * アクセスパスの各セグメントの位置を記録します（同じパスでは最初の位置を残します）。
+ *
+ * @param into 記録先
+ * @param path アクセスパス
+ * @param node アクセス式の最も外側のノード
+ */
+function rememberSegments(
+    into: Map<string, SourcePosition[]>,
+    path: string,
+    node: Parser.SyntaxNode
+): void {
+    if (into.has(path)) {
+        return;
+    }
+    into.set(
+        path,
+        accessSegmentNodes(node).map(segment => ({
+            line: segment.startPosition.row,
+            column: segment.startPosition.column
+        }))
+    );
+}
+
+/**
  * シンボルの参照位置を記録します（同じ名前では最初の位置を残します）。
  *
  * @param into 記録先
@@ -2059,6 +2123,9 @@ function analyzeBody(
     // 定義位置の解決に使う、各シンボルの参照位置
     const usagePositions = new Map<string, SourcePosition>();
 
+    // 配列の次元を埋めるための、アクセスパスの各セグメントの位置
+    const segmentPositions = new Map<string, SourcePosition[]>();
+
     if (bodyNode) {
         // ---- パス1: 宣言と関数呼び出しの収集 ----
         // 読み書きの分類（パス2）はローカル変数と呼び出し関数の一覧が確定している必要があるため、
@@ -2095,12 +2162,12 @@ function analyzeBody(
             // 代入式: result = value など
             if (node.type === 'assignment_expression') {
                 const leftNode = node.childForFieldName('left') || node.child(0)!;
-                checkLhsWrites(leftNode, params, localVars, pointerWrites, globalVarWrites, usagePositions);
+                checkLhsWrites(leftNode, params, localVars, pointerWrites, globalVarWrites, usagePositions, segmentPositions);
             }
             // インクリメント・デクリメント式: i++ や --p など
             if (node.type === 'update_expression') {
                 const argumentNode = node.childForFieldName('argument') || node.child(0)!;
-                checkLhsWrites(argumentNode, params, localVars, pointerWrites, globalVarWrites, usagePositions);
+                checkLhsWrites(argumentNode, params, localVars, pointerWrites, globalVarWrites, usagePositions, segmentPositions);
             }
 
             // D. 識別子 (identifier) が出現した際の、入力（読み取り）グローバル変数の候補判定
@@ -2134,6 +2201,7 @@ function analyzeBody(
                         if (!isLhsNode(node)) {
                             pointerReads.add(accessPath);
                             rememberUsage(usagePositions, accessPath, targetNode);
+                            rememberSegments(segmentPositions, accessPath, outerNode);
                         }
                     }
 
@@ -2152,6 +2220,7 @@ function analyzeBody(
                         if (!isLhsNode(node)) {
                             globalVarReads.add(accessPath);
                             rememberUsage(usagePositions, accessPath, targetNode);
+                            rememberSegments(segmentPositions, accessPath, outerNode);
                         }
                     }
                 }
@@ -2163,6 +2232,7 @@ function analyzeBody(
         localVars,
         calledFunctions: calledFunctionsSet,
         usagePositions,
+        segmentPositions,
         globalVarReads,
         globalVarWrites,
         pointerReads,
@@ -2189,7 +2259,7 @@ function buildResult(
 ): AnalysisResult {
     const { functionName, returnType, params } = signature;
     const {
-        localVars, calledFunctions, usagePositions,
+        localVars, calledFunctions, usagePositions, segmentPositions,
         globalVarReads, globalVarWrites, pointerReads, pointerWrites
     } = body;
 
@@ -2265,7 +2335,8 @@ function buildResult(
                         details: '出力引数（ポインタ書き込みあり）',
                         definition: resolvedPath.definition,
                         comment: resolvedPath.comment,
-                        usage: usagePositions.get(path)
+                        usage: usagePositions.get(path),
+                        segments: segmentPositions.get(path)
                     });
                 });
             }
@@ -2279,7 +2350,8 @@ function buildResult(
                         details: '入力引数（ポインタ読み取りあり）',
                         definition: resolvedPath.definition,
                         comment: resolvedPath.comment,
-                        usage: usagePositions.get(path)
+                        usage: usagePositions.get(path),
+                        segments: segmentPositions.get(path)
                     });
                 });
             }
@@ -2374,14 +2446,16 @@ function buildResult(
                         details,
                         definition: resolvedPath.definition,
                         comment: resolvedPath.comment,
-                        usage: usagePositions.get(path)
+                        usage: usagePositions.get(path),
+                        segments: segmentPositions.get(path)
                     });
                 } else {
                     target.push({
                         name: path,
                         type: UNKNOWN_TYPE,
                         details,
-                        usage: usagePositions.get(path)
+                        usage: usagePositions.get(path),
+                        segments: segmentPositions.get(path)
                     });
                 }
             }
@@ -2557,7 +2631,8 @@ function checkLhsWrites(
     localVars: Map<string, DeclaredVar>,
     pointerWrites: Set<string>,
     globalVarWrites: Set<string>,
-    usagePositions: Map<string, SourcePosition>
+    usagePositions: Map<string, SourcePosition>,
+    segmentPositions: Map<string, SourcePosition[]>
 ) {
     const resolved = resolveLhsVariable(node);
     if (!resolved) {
@@ -2574,6 +2649,7 @@ function checkLhsWrites(
         if (param.isPointer && isPointerWrite) {
             pointerWrites.add(path);
             rememberUsage(usagePositions, path, targetNode);
+            rememberSegments(segmentPositions, path, node);
         }
     } else {
         // 引数以外（＝グローバル変数、またはローカル変数）の場合:
@@ -2582,6 +2658,7 @@ function checkLhsWrites(
         if (!isLocal && !EXCLUDE_LIST.has(rootName)) {
             globalVarWrites.add(path);
             rememberUsage(usagePositions, path, targetNode);
+            rememberSegments(segmentPositions, path, node);
         }
     }
 }
