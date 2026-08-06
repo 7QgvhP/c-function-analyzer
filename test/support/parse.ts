@@ -6,7 +6,13 @@
  */
 import * as path from 'path';
 import Parser = require('web-tree-sitter');
-import { analyzeCFunction, AnalysisResult, VariableInfo } from '../../src/analyzer';
+import {
+    analyzeCFunction,
+    describeDefinitionSite,
+    AnalysisResult,
+    DefinitionInfo,
+    VariableInfo
+} from '../../src/analyzer';
 import { parseWithModifierMacroRepair } from '../../src/macroRepair';
 
 /** 初期化済みパーサーのキャッシュ（初期化コストが高いため再利用する） */
@@ -94,6 +100,47 @@ export async function analyzeOrThrow(
         throw new Error(`解析結果が null でした（シグネチャ: "${signatureHint}"）。`);
     }
     return result;
+}
+
+/**
+ * 定義位置にある宣言を読み取ります（VS Code の定義プロバイダの代わり）。
+ *
+ * 指定した名前が**単語として最初に現れる位置**を定義位置とみなします。
+ * 関数ヘッダに同じ名前が書かれている場合があるため、コメント内の位置は対象外とします。
+ *
+ * @param source 定義があるソースコード
+ * @param name 定義を読み取る名前
+ * @returns 読み取った宣言の情報
+ * @throws 指定した名前がソース内に見つからない場合
+ */
+export async function describeDefinitionOf(
+    source: string,
+    name: string
+): Promise<DefinitionInfo> {
+    const parser = await getParser();
+    const tree = parseWithModifierMacroRepair(parser, source);
+
+    const identifierChar = /[A-Za-z0-9_]/;
+    const lines = source.split('\n');
+
+    for (let row = 0; row < lines.length; row++) {
+        const text = lines[row];
+        for (let at = text.indexOf(name); at >= 0; at = text.indexOf(name, at + 1)) {
+            const before = at === 0 ? '' : text[at - 1];
+            const after = text[at + name.length] || '';
+            if (identifierChar.test(before) || identifierChar.test(after)) {
+                continue;
+            }
+            // コメント内に書かれた名前（関数ヘッダなど）は定義位置ではない
+            const node = tree.rootNode.descendantForPosition({ row, column: at });
+            if (node && node.type === 'comment') {
+                continue;
+            }
+            return describeDefinitionSite(tree, row, at);
+        }
+    }
+
+    throw new Error(`名前 "${name}" の定義位置がソース内に見つかりません。`);
 }
 
 /**
