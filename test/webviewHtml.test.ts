@@ -405,7 +405,15 @@ describe('renderAnalysisHtml: コピー形式の切り替え', () => {
         const html = renderAnalysisHtml(makeResult(), 'N');
         assert.ok(html.includes('class="copy-format"'), '切り替えUIが出力されること');
         assert.ok(html.includes('data-format="name"'), '「変数名」の選択肢があること');
-        assert.ok(html.includes('data-format="typeAndName"'), '「型名 + 変数名」の選択肢があること');
+        assert.ok(html.includes('data-format="typeAndName"'), '「型名 + 変数名 + コメント」の選択肢があること');
+    });
+
+    test('コピー形式のラベルが実際の出力内容と一致する (v3.0.2)', () => {
+        const html = renderAnalysisHtml(makeResult(), 'N');
+        assert.ok(
+            html.includes('>型名 + 変数名 + コメント</button>'),
+            'コメントもコピーされることがラベルから分かること'
+        );
     });
 
     test('既定では「変数名」が選択状態となる', () => {
@@ -629,6 +637,26 @@ describe('buildCopyText: コメント列', () => {
         const build = extractBuildCopyText(html, 'typeAndName');
         assert.equal(build([fakeItem('int', 'count')]), 'int\tcount');
         assert.equal(build([fakeItem('macro', 'MAX', '10')]), 'macro\tMAX\t10');
+    });
+
+    test('コメントを持つ項目が混在する場合、全行に列を出して列数をそろえる (v3.0.2)', () => {
+        const html = renderAnalysisHtml(makeResult(), 'N', 'typeAndName');
+        const build = extractBuildCopyText(html, 'typeAndName');
+        assert.equal(
+            build([fakeItem('U8', 'channel', '', 'チャンネル番号'), fakeItem('int', 'count')]),
+            'U8\tchannel\tチャンネル番号\nint\tcount\t',
+            'コメントがない行にも空の列を出すこと'
+        );
+    });
+
+    test('定義値を持つ項目が混在する場合、全行に列を出して列数をそろえる (v3.0.2)', () => {
+        const html = renderAnalysisHtml(makeResult(), 'N', 'typeAndName');
+        const build = extractBuildCopyText(html, 'typeAndName');
+        assert.equal(
+            build([fakeItem('macro', 'MAX', '10', '上限値'), fakeItem('macro', 'MIN', '', '下限値')]),
+            'macro\tMAX\t10\t上限値\nmacro\tMIN\t\t下限値',
+            '定義値がない行でも、コメントが同じ列に来ること'
+        );
     });
 
     test('変数名のみの形式ではコメントを含めない', () => {
