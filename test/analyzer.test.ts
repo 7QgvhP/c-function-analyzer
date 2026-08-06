@@ -7,7 +7,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { analyze, analyzeOrThrow, names, findVar } from './support/parse';
+import { analyze, analyzeOrThrow, describeDefinitionOf, names, findVar } from './support/parse';
 
 describe('フェーズ3: シグネチャ解析', () => {
     test('関数名と戻り値の型を取得する', async () => {
@@ -2286,5 +2286,222 @@ void work(void) {
         const item = r.inputs.find(v => v.name === 'g_tbl[8].value');
         assert.equal(item?.segments?.length, 2);
         assert.deepEqual(item?.segments?.[0], { line: 6, column: 8 });
+    });
+});
+
+describe('関数ヘッダのコメント', () => {
+    test('直前の関数ヘッダから、関数名より後ろを説明として取り出す (v3.1.0)', async () => {
+        const info = await describeDefinitionOf(`
+/*
+@berif hoge_fv ○○をする関数
+*/
+void hoge_fv(void){
+}
+`, 'hoge_fv');
+        assert.equal(info.kind, 'function');
+        assert.equal(info.comment, '○○をする関数');
+    });
+
+    test('@param や @return の行は説明に含めない (v3.1.0)', async () => {
+        const info = await describeDefinitionOf(`
+/*
+@brief  calc_sum 合計を求める
+@param  a 左辺
+@return 合計
+*/
+int calc_sum(int a, int b){ return a + b; }
+`, 'calc_sum');
+        assert.equal(info.comment, '合計を求める');
+    });
+
+    test('行頭に飾りの * があるヘッダも読み取る (v3.1.0)', async () => {
+        const info = await describeDefinitionOf(`
+/**
+ * @brief  init_hw ハードウェアを初期化する
+ * @return なし
+ */
+void init_hw(void){}
+`, 'init_hw');
+        assert.equal(info.comment, 'ハードウェアを初期化する');
+    });
+
+    test('関数名を含む行が無い場合は、先頭の命令を除いた最初の行を使う (v3.1.0)', async () => {
+        const info = await describeDefinitionOf(`
+/*
+ * @brief ○○を停止する
+ */
+void stop_fv(void){}
+`, 'stop_fv');
+        assert.equal(info.comment, '○○を停止する');
+    });
+
+    test('関数名だけの行のときは、続く行を説明とみなす (v3.1.0)', async () => {
+        const info = await describeDefinitionOf(`
+/*
+@brief hoge2_fv
+  △△をする関数
+*/
+void hoge2_fv(void){}
+`, 'hoge2_fv');
+        assert.equal(info.comment, '△△をする関数');
+    });
+
+    test('行コメントを並べたヘッダも読み取る (v3.1.0)', async () => {
+        const info = await describeDefinitionOf(`
+// line_fv ××をする関数
+// 補足
+void line_fv(void){}
+`, 'line_fv');
+        assert.equal(info.comment, '××をする関数');
+    });
+
+    test('関数名の後ろの区切り記号を取り除く (v3.1.0)', async () => {
+        const info = await describeDefinitionOf(`
+/*
+ * sep_fv : ○○を設定する
+ */
+void sep_fv(void){}
+`, 'sep_fv');
+        assert.equal(info.comment, '○○を設定する');
+    });
+
+    test('似た名前の行ではなく、関数名と一致する行を使う (v3.1.0)', async () => {
+        const info = await describeDefinitionOf(`
+/*
+@brief hoge_fv2 別の関数
+@brief hoge_fv  本来の関数
+*/
+void hoge_fv(void){}
+`, 'hoge_fv');
+        assert.equal(info.comment, '本来の関数');
+    });
+
+    test('空行を1行はさんだヘッダも読み取る (v3.1.0)', async () => {
+        const info = await describeDefinitionOf(`
+/*
+@brief gap_fv 空行ありの関数
+*/
+
+void gap_fv(void){}
+`, 'gap_fv');
+        assert.equal(info.comment, '空行ありの関数');
+    });
+
+    test('空行を2行以上はさむ場合はヘッダとみなさない (v3.1.0)', async () => {
+        const info = await describeDefinitionOf(`
+/*
+@brief far_fv 離れたコメント
+*/
+
+
+void far_fv(void){}
+`, 'far_fv');
+        assert.equal(info.comment, undefined);
+    });
+
+    test('プロトタイプ宣言でもヘッダから読み取る (v3.1.0)', async () => {
+        const info = await describeDefinitionOf(`
+/*
+@berif proto_fv □□をする関数
+*/
+void proto_fv(void);
+`, 'proto_fv');
+        assert.equal(info.kind, 'function');
+        assert.equal(info.comment, '□□をする関数');
+    });
+
+    test('ヘッダが無い関数は、従来どおり右側のコメントを使う (v3.1.0)', async () => {
+        const info = await describeDefinitionOf(`
+void tail_fv(void);  /* 右側の説明 */
+`, 'tail_fv');
+        assert.equal(info.comment, '右側の説明');
+    });
+
+    test('関数名の後ろのハイフンを取り除く (v3.1.0)', async () => {
+        const info = await describeDefinitionOf(`
+/*
+@berif dash_fv - ○○をする関数
+*/
+void dash_fv(void){}
+`, 'dash_fv');
+        assert.equal(info.comment, '○○をする関数');
+    });
+
+    test('説明を囲む <> を取り除く (v3.1.0)', async () => {
+        const info = await describeDefinitionOf(`
+/*
+@berif angle_fv <○○をする関数>
+*/
+void angle_fv(void){}
+`, 'angle_fv');
+        assert.equal(info.comment, '○○をする関数');
+    });
+
+    test('関数名ごと <> で囲まれていても取り除く (v3.1.0)', async () => {
+        const info = await describeDefinitionOf(`
+/*
+@berif <whole_fv ○○をする関数>
+*/
+void whole_fv(void){}
+`, 'whole_fv');
+        assert.equal(info.comment, '○○をする関数');
+    });
+
+    test('区切り記号と <> が重なっていても取り除く (v3.1.0)', async () => {
+        const info = await describeDefinitionOf(`
+/*
+@berif both_fv - <○○をする関数>
+*/
+void both_fv(void){}
+`, 'both_fv');
+        assert.equal(info.comment, '○○をする関数');
+    });
+
+    test('全角の＜＞・「」・【】も取り除く (v3.1.0)', async () => {
+        const cases: [string, string][] = [
+            ['wide_fv', '＜○○をする関数＞'],
+            ['kagi_fv', '「○○をする関数」'],
+            ['sumi_fv', '【○○をする関数】']
+        ];
+        for (const [name, description] of cases) {
+            const info = await describeDefinitionOf(`
+/*
+@berif ${name} ${description}
+*/
+void ${name}(void){}
+`, name);
+            assert.equal(info.comment, '○○をする関数', `${description} を取り除くこと`);
+        }
+    });
+
+    test('関数名を含む行が無い場合も <> を取り除く (v3.1.0)', async () => {
+        const info = await describeDefinitionOf(`
+/*
+@brief <○○を停止する>
+*/
+void halt_fv(void){}
+`, 'halt_fv');
+        assert.equal(info.comment, '○○を停止する');
+    });
+
+    test('説明の途中にある括弧は残す (v3.1.0)', async () => {
+        const info = await describeDefinitionOf(`
+/*
+@berif keep_fv ○○を(一部)する関数
+*/
+void keep_fv(void){}
+`, 'keep_fv');
+        assert.equal(info.comment, '○○を(一部)する関数');
+    });
+
+    test('変数は直前のコメントを拾わない (v3.1.0)', async () => {
+        const info = await describeDefinitionOf(`
+/*
+@brief g_count 拾ってはいけない
+*/
+int g_count;
+`, 'g_count');
+        assert.equal(info.kind, 'variable');
+        assert.equal(info.comment, undefined);
     });
 });

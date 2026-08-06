@@ -405,6 +405,235 @@ function collapseSpaces(text: string): string {
 }
 
 /**
+ * 関数ヘッダとみなすコメントと、宣言との間に許容する空行の数です。
+ *
+ * 0 にすると空行を1行入れる書き方に対応できず、大きくするとファイル冒頭の
+ * 見出しコメントを最初の関数のヘッダとして拾ってしまうため、1行までとします。
+ */
+const HEADER_COMMENT_MAX_GAP = 1;
+
+/**
+ * 関数の直前に書かれた関数ヘッダのコメントから、説明の本文を取り出します。
+ *
+ * 関数は宣言の右側ではなく、次のように**直前のブロックコメント**へ説明を書く
+ * 習慣があるため、変数とは別の探し方をします。
+ *
+ * ```
+ * 開始記号
+ * @brief hoge_fv ○○をする関数
+ * @param なし
+ * 終端記号
+ * void hoge_fv(void)
+ * ```
+ *
+ * 本文は、ヘッダの中で**関数名を含む行の、関数名より後ろ**を採用します
+ * （上の例では「○○をする関数」）。関数名を含む行が無い場合は、最初の非空行から
+ * 先頭の Doxygen 命令（`@brief` など）を取り除いたものを使います。
+ *
+ * 区切り記号（`-` `:` など）と、説明を囲む括弧（`<>` `「」` など）は取り除きます。
+ *
+ * @param declNode 宣言ノード（`function_definition` またはプロトタイプの `declaration`）
+ * @param functionName 関数名
+ * @returns 説明の本文。ヘッダが無い、または本文を取り出せない場合は undefined
+ */
+function findFunctionHeaderComment(
+    declNode: Parser.SyntaxNode,
+    functionName: string
+): string | undefined {
+    const lines = headerCommentLines(collectHeaderCommentNodes(declNode));
+    if (lines.length === 0) {
+        return undefined;
+    }
+
+    // 関数名を含む行があれば、その関数名より後ろを説明とみなす
+    for (let i = 0; i < lines.length; i++) {
+        const at = indexOfWord(lines[i], functionName);
+        if (at < 0) {
+            continue;
+        }
+        const rest = stripEnclosingBrackets(
+            stripLeadingSeparators(lines[i].substring(at + functionName.length)),
+            lines[i].substring(0, at)
+        );
+        if (rest) {
+            return rest;
+        }
+        // 関数名だけの行だった場合は、続く行を説明とみなす
+        return firstDescriptionLine(lines.slice(i + 1));
+    }
+
+    return firstDescriptionLine(lines);
+}
+
+/**
+ * 宣言の直前に連なっているコメントノードを、上から順に集めます。
+ *
+ * 行コメントを複数行並べて書いたヘッダにも対応するため、隣接している限り
+ * 遡って集めます。
+ *
+ * @param declNode 宣言ノード
+ * @returns コメントノードの配列（ソース上の並び順）
+ */
+function collectHeaderCommentNodes(declNode: Parser.SyntaxNode): Parser.SyntaxNode[] {
+    const nodes: Parser.SyntaxNode[] = [];
+    // 直前の要素に期待する終了行（これより離れていれば、その宣言のヘッダではない）
+    let expectedEndRow = declNode.startPosition.row - 1;
+
+    for (let sibling = declNode.previousSibling; sibling; sibling = sibling.previousSibling) {
+        if (sibling.type !== 'comment') {
+            break;
+        }
+        if (expectedEndRow - sibling.endPosition.row > HEADER_COMMENT_MAX_GAP) {
+            break;
+        }
+        nodes.unshift(sibling);
+        expectedEndRow = sibling.startPosition.row - 1;
+    }
+    return nodes;
+}
+
+/**
+ * コメントノードの並びから、コメント記号を取り除いた本文の行を取り出します。
+ *
+ * @param nodes コメントノードの配列
+ * @returns 空行を除いた本文の行
+ */
+function headerCommentLines(nodes: Parser.SyntaxNode[]): string[] {
+    const lines: string[] = [];
+
+    nodes.forEach(node => {
+        node.text.split(/\r?\n/).forEach(raw => {
+            const body = raw
+                // ブロックコメント・行コメントの開始記号（Doxygen の `!` `<` を含む）
+                .replace(/^\s*\/\*+!?<?/, '')
+                .replace(/^\s*\/\/+!?<?/, '')
+                // ブロックコメント内の行頭に並べる飾りの `*`
+                .replace(/^\s*\*+(?!\/)/, '')
+                // ブロックコメントの終端
+                .replace(/\*+\/\s*$/, '');
+
+            const line = collapseSpaces(body);
+            if (line) {
+                lines.push(line);
+            }
+        });
+    });
+
+    return lines;
+}
+
+/**
+ * 最初の非空行から、先頭の Doxygen 命令を取り除いた本文を返します。
+ *
+ * @param lines 本文の行
+ * @returns 説明の本文。取り出せない場合は undefined
+ */
+function firstDescriptionLine(lines: string[]): string | undefined {
+    for (const line of lines) {
+        const body = stripDoxygenCommand(line);
+        if (body) {
+            return body;
+        }
+    }
+    return undefined;
+}
+
+/**
+ * 行頭の Doxygen 命令（`@brief` `\brief` など）を取り除きます。
+ *
+ * 命令名は綴りを問わず取り除きます（`@berif` のような書き間違いも実際にあるため）。
+ *
+ * @param line 対象の行
+ * @returns 命令を取り除いた本文
+ */
+function stripDoxygenCommand(line: string): string {
+    return stripEnclosingBrackets(stripLeadingSeparators(line.replace(/^[@\\][A-Za-z]+\b/, '')));
+}
+
+/**
+ * 行頭にある区切り記号と空白を取り除きます。
+ *
+ * 関数名の後ろに `:` や `-` を置く書き方があるためです。
+ *
+ * @param text 対象のテキスト
+ * @returns 取り除いた後のテキスト
+ */
+function stripLeadingSeparators(text: string): string {
+    return text.replace(/^[\s:：;；\-‐‑–—―−ー－_＿・･,、|｜/／>＞]+/, '').trim();
+}
+
+/**
+ * 説明を囲んでいる括弧の対を表します（開き記号と閉じ記号）。
+ *
+ * 関数ヘッダでは `@brief hoge_fv <○○をする関数>` のように、説明を括弧で
+ * 囲む書き方があるためです。
+ */
+const DESCRIPTION_BRACKETS: [string, string][] = [
+    ['<', '>'],
+    ['＜', '＞'],
+    ['「', '」'],
+    ['『', '』'],
+    ['【', '】'],
+    ['〈', '〉'],
+    ['《', '》']
+];
+
+/**
+ * 説明を囲んでいる括弧を取り除きます。
+ *
+ * 関数名ごと囲んでいる書き方（`<hoge_fv ○○をする関数>`）では、関数名より後ろを
+ * 取り出した時点で閉じ記号だけが残るため、開き記号が関数名の手前にある場合も
+ * 取り除きます。
+ *
+ * @param text 対象のテキスト
+ * @param precedingText 対象のテキストより手前にあったテキスト（省略時は考慮しない）
+ * @returns 括弧を取り除いた本文
+ */
+function stripEnclosingBrackets(text: string, precedingText: string = ''): string {
+    for (const [open, close] of DESCRIPTION_BRACKETS) {
+        // 説明だけを囲んでいる場合（`<○○をする関数>`）
+        if (text.length >= 2 && text.startsWith(open) && text.endsWith(close)) {
+            return text.slice(1, -1).trim();
+        }
+        // 関数名ごと囲んでいる場合（`<hoge_fv ○○をする関数>`）
+        if (text.endsWith(close) && precedingText.includes(open)) {
+            return text.slice(0, -1).trim();
+        }
+    }
+    return text;
+}
+
+/**
+ * テキストの中から、単語として一致する位置を探します。
+ *
+ * 部分一致で別の名前（`hoge_fv2` など）を拾わないよう、前後が識別子の文字で
+ * ないことを確かめます。
+ *
+ * @param text 対象のテキスト
+ * @param word 探す単語
+ * @returns 見つかった位置。見つからない場合は -1
+ */
+function indexOfWord(text: string, word: string): number {
+    if (!word) {
+        return -1;
+    }
+    const identifierChar = /[A-Za-z0-9_]/;
+
+    for (let from = 0; ; ) {
+        const at = text.indexOf(word, from);
+        if (at < 0) {
+            return -1;
+        }
+        const before = at === 0 ? '' : text[at - 1];
+        const after = text[at + word.length] || '';
+        if (!identifierChar.test(before) && !identifierChar.test(after)) {
+            return at;
+        }
+        from = at + 1;
+    }
+}
+
+/**
  * ASTノードの開始位置を定義位置として取り出します。
  *
  * @param node 対象ノード
@@ -1693,12 +1922,19 @@ export function describeDefinitionSite(
                 ? extractReturnType(declNode, declaratorNode, info ? info.pointerDepth : 0)
                 : '',
             arrayDimensions: [],
-            comment
+            // 関数は直前の関数ヘッダを優先し、無い場合のみ右側のコメントを使う
+            comment: findFunctionHeaderComment(declNode, nameNode.text) || comment
         };
     }
 
     // 変数宣言・構造体メンバ・引数・関数プロトタイプ宣言
-    return describeDeclaration(declNode, nameNode, comment);
+    // （プロトタイプ宣言も関数のため、ヘッダのコメントを渡しておく）
+    return describeDeclaration(
+        declNode,
+        nameNode,
+        comment,
+        findFunctionHeaderComment(declNode, nameNode.text)
+    );
 }
 
 /**
@@ -1792,12 +2028,14 @@ function isTypeNameInFile(name: string, tree: Parser.Tree, visited: Set<string>)
  * @param declNode 宣言ノード
  * @param nameNode 定義位置にあるノード（名前の識別子）
  * @param comment 宣言の右側に書かれたコメント
+ * @param headerComment 直前の関数ヘッダから読み取ったコメント（関数プロトタイプ宣言でのみ使う）
  * @returns 読み取った宣言の情報
  */
 function describeDeclaration(
     declNode: Parser.SyntaxNode,
     nameNode: Parser.SyntaxNode,
-    comment?: string
+    comment?: string,
+    headerComment?: string
 ): DefinitionInfo {
     const typeNode = declNode.childForFieldName('type') || declNode.child(0);
     const typeText = typeNode ? cleanTypeText(typeNode.text) : '';
@@ -1821,7 +2059,8 @@ function describeDeclaration(
                 kind: 'function',
                 type: extractReturnType(declNode, decl, info.pointerDepth),
                 arrayDimensions: [],
-                comment
+                // 関数は直前の関数ヘッダを優先し、無い場合のみ右側のコメントを使う
+                comment: headerComment || comment
             };
         }
         return {
