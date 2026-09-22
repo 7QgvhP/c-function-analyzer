@@ -1,11 +1,24 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import Parser = require('web-tree-sitter');
-import { analyzeCFunction, describeDefinitionSite, SourcePosition } from './analyzer';
+import { AnalysisResult, analyzeCFunction, describeDefinitionSite, SourcePosition } from './analyzer';
 import { FunctionAnalyzerWebview } from './webview';
 import { parseWithModifierMacroRepair } from './macroRepair';
 import { createExcludeFilter } from './excludePaths';
 import { DefinitionCandidate, DefinitionLookup, resolveDefinitions } from './definitionResolver';
+import {
+    DefinitionDiagnosis,
+    EditorSignals,
+    formatDiagnosisReport,
+    ReportEntry,
+    SignalDiagnostic
+} from './definitionDiagnosis';
+
+/** 定義ジャンプの診断結果を書き出す出力パネルの名前 */
+const DIAGNOSIS_CHANNEL_NAME = 'C Function Analyzer: 定義の診断';
+
+/** C/C++ 拡張（IntelliSense）の拡張機能ID */
+const CPPTOOLS_EXTENSION_ID = 'ms-vscode.cpptools';
 
 /**
  * 拡張機能がアクティベートされた際に実行されます。
@@ -36,6 +49,15 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.window.showErrorMessage('C言語パーサー (WASM) のロードに失敗しました: ' + err);
         return;
     }
+
+    // 定義ジャンプの診断結果の書き出し先（解析のたびに最新の結果へ置き換える）
+    const diagnosisChannel = vscode.window.createOutputChannel(DIAGNOSIS_CHANNEL_NAME);
+    context.subscriptions.push(diagnosisChannel);
+    context.subscriptions.push(
+        vscode.commands.registerCommand('c-function-analyzer.showDefinitionDiagnostics', () => {
+            diagnosisChannel.show(true);
+        })
+    );
 
     // 2. コマンド 'c-function-analyzer.analyze' の登録
     const disposable = vscode.commands.registerCommand('c-function-analyzer.analyze', async () => {
@@ -74,13 +96,16 @@ export async function activate(context: vscode.ExtensionContext) {
                 return;
             }
 
-            // 定義位置を辿って、型名・コメント・定義値を埋める
+            // 定義位置を辿って、型名・コメント・定義値を埋める。
+            // あわせて、項目ごとに定義ジャンプの結果と原因を判定する
+            const signals = collectEditorSignals(document);
             const lookup = createDefinitionLookup(parser, document);
             try {
-                await resolveDefinitions(result, lookup);
+                await resolveDefinitions(result, lookup, signals);
             } finally {
                 lookup.dispose();
             }
+            writeDiagnosisReport(diagnosisChannel, result, signals, document);
 
             // Webview パネルを表示して解析結果を描画
             result.filePath = document.uri.toString();
@@ -100,7 +125,8 @@ interface DisposableDefinitionLookup extends DefinitionLookup {
  * VS Code の定義プロバイダ（F12 と同じもの）を使う定義解決手段を作ります。
  *
  * 候補が複数返る場合（ビルド時に切り替える同名ファイルなど）は、設定 `excludePaths`
- * に該当するものを取り除きます。残りが無ければ「定義なし」として扱います。
+ * に該当するものを取り除きます（除外そのものは definitionResolver.ts が `isExcluded` を
+ * 使って行います）。残りが無ければ「定義なし」として扱います。
  *
  * @param parser 言語設定済みのパーサー
  * @param document 解析対象のドキュメント（参照位置の基準）
@@ -130,14 +156,24 @@ function createDefinitionLookup(
                 document.uri,
                 new vscode.Position(usage.line, usage.column)
             );
-            return toCandidates(locations).filter(candidate => {
-                try {
-                    return !isExcluded(vscode.Uri.parse(candidate.filePath).fsPath);
-                } catch {
-                    // URI として解釈できない候補は除外対象と判断できないため残す
-                    return true;
-                }
-            });
+            return toCandidates(locations);
+        },
+
+        isExcluded(candidate: DefinitionCandidate): boolean {
+            try {
+                return isExcluded(vscode.Uri.parse(candidate.filePath).fsPath);
+            } catch {
+                // URI として解釈できない候補は除外対象と判断できないため残す
+                return false;
+            }
+        },
+
+        tokenAt(usage: SourcePosition): string | undefined {
+            const range = document.getWordRangeAtPosition(
+                new vscode.Position(usage.line, usage.column),
+                /[A-Za-z_][A-Za-z0-9_]*/
+            );
+            return range ? document.getText(range) : undefined;
         },
 
         async describe(candidate: DefinitionCandidate) {
@@ -164,6 +200,118 @@ function createDefinitionLookup(
             trees.clear();
         }
     };
+}
+
+/**
+ * 原因の判定に使う手がかりを、エディタから集めます。
+ *
+ * C/C++ 拡張が解析対象ファイルに出しているエラー・警告と、そのエラー表示の設定を読み取ります。
+ *
+ * @param document 解析対象のドキュメント
+ * @returns 判定に使う手がかり
+ */
+function collectEditorSignals(document: vscode.TextDocument): EditorSignals {
+    const diagnostics = vscode.languages.getDiagnostics(document.uri).map(toSignalDiagnostic);
+    const errorSquiggles = vscode.workspace
+        .getConfiguration('C_Cpp', document.uri)
+        .get<string>('errorSquiggles');
+    const cppTools = vscode.extensions.getExtension(CPPTOOLS_EXTENSION_ID);
+    return {
+        diagnostics,
+        errorSquiggles,
+        cppToolsActive: cppTools ? cppTools.isActive : false
+    };
+}
+
+/**
+ * VS Code のエラー・警告を、判定に必要な情報だけの形へ変換します。
+ *
+ * @param diagnostic VS Code のエラー・警告
+ * @returns 判定用のエラー・警告
+ */
+function toSignalDiagnostic(diagnostic: vscode.Diagnostic): SignalDiagnostic {
+    const code = diagnostic.code;
+    // code は文字列・数値のほか、リンク付きの { value, target } の形もある
+    const codeText = code === undefined
+        ? undefined
+        : String(typeof code === 'object' ? code.value : code);
+    return {
+        line: diagnostic.range.start.line,
+        column: diagnostic.range.start.character,
+        endLine: diagnostic.range.end.line,
+        endColumn: diagnostic.range.end.character,
+        severity: toSeverityName(diagnostic.severity),
+        source: diagnostic.source,
+        code: codeText,
+        message: diagnostic.message
+    };
+}
+
+/**
+ * エラー・警告の重大度を名前に変換します。
+ *
+ * @param severity VS Code の重大度
+ * @returns 重大度の名前
+ */
+function toSeverityName(severity: vscode.DiagnosticSeverity): SignalDiagnostic['severity'] {
+    switch (severity) {
+        case vscode.DiagnosticSeverity.Error:
+            return 'error';
+        case vscode.DiagnosticSeverity.Warning:
+            return 'warning';
+        case vscode.DiagnosticSeverity.Information:
+            return 'information';
+        default:
+            return 'hint';
+    }
+}
+
+/**
+ * 解析結果の診断を出力パネルへ書き出します（前回の内容は消します）。
+ *
+ * 出力パネルは自動では開きません。Webview の「定義の診断」ボタン、または
+ * コマンド「定義ジャンプの診断を表示」で開きます。
+ *
+ * @param channel 書き出し先の出力パネル
+ * @param result 定義を解決済みの解析結果
+ * @param signals 判定に使った手がかり
+ * @param document 解析対象のドキュメント
+ */
+function writeDiagnosisReport(
+    channel: vscode.OutputChannel,
+    result: AnalysisResult,
+    signals: EditorSignals,
+    document: vscode.TextDocument
+): void {
+    const sections: [string, { name: string; diagnosis?: DefinitionDiagnosis }[]][] = [
+        ['入力変数', result.inputs],
+        ['出力変数', result.outputs],
+        ['内部変数', result.internalVariables],
+        ['マクロ変数', result.macroVariables ?? []],
+        ['呼び出し関数', result.calledFunctions],
+        ['マクロ関数', result.macroFunctions ?? []]
+    ];
+    const entries: ReportEntry[] = [];
+    sections.forEach(([section, items]) => {
+        items.forEach(item => {
+            if (item.diagnosis) {
+                entries.push({ section, name: item.name, diagnosis: item.diagnosis });
+            }
+        });
+    });
+
+    const cppTools = vscode.extensions.getExtension(CPPTOOLS_EXTENSION_ID);
+    const cppToolsStatus = cppTools
+        ? `${CPPTOOLS_EXTENSION_ID} ${cppTools.packageJSON?.version ?? ''}（${cppTools.isActive ? '有効' : '未起動'}）`
+        : `${CPPTOOLS_EXTENSION_ID} は未インストール`;
+
+    channel.clear();
+    channel.appendLine(formatDiagnosisReport(entries, signals, {
+        timestamp: new Date().toLocaleString('ja-JP'),
+        filePath: document.uri.fsPath,
+        functionName: result.functionName,
+        cppToolsStatus
+    }));
 }
 
 /**

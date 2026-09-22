@@ -76,6 +76,10 @@ export class FunctionAnalyzerWebview {
                             this._commentWidth = clampCommentWidth(message.width);
                         }
                         break;
+                    case 'showDefinitionDiagnostics':
+                        // 定義ジャンプの診断結果（出力パネル）を開く
+                        vscode.commands.executeCommand('c-function-analyzer.showDefinitionDiagnostics');
+                        break;
                     case 'setCopyFormat':
                         // 再描画時にも選択を保つため、拡張機能側で保持する
                         if (message.format === 'name' || message.format === 'typeAndName') {

@@ -1,4 +1,5 @@
 import Parser = require('web-tree-sitter');
+import type { DefinitionDiagnosis } from './definitionDiagnosis';
 
 // 解析結果を保持するインターフェース定義
 
@@ -64,6 +65,8 @@ export interface VariableInfo {
      * 次元を埋めるのに使います。
      */
     segments?: SourcePosition[];
+    /** 定義ジャンプの結果と原因の判定（定義を探さなかった項目では未設定） */
+    diagnosis?: DefinitionDiagnosis;
 }
 
 /** インクルードファイルの解決結果 */
@@ -119,6 +122,8 @@ export interface FunctionInfo {
     usage?: SourcePosition;
     /** 宣言・定義されている位置。特定できなかった場合は未設定 */
     definition?: DefinitionLocation;
+    /** 定義ジャンプの結果と原因の判定（定義を探さなかった項目では未設定） */
+    diagnosis?: DefinitionDiagnosis;
 }
 
 export interface AnalysisResult {

@@ -332,3 +332,155 @@ describe('resolveDefinitions: 例外への耐性', () => {
         assert.equal(result.outputs[0].definition, undefined);
     });
 });
+
+describe('resolveDefinitions: excludePaths による除外', () => {
+    test('除外対象の候補を取り除き、残った候補を採用する', async () => {
+        const result = makeResult({
+            outputs: [{ name: 'g_count', type: '(推定)', details: '', usage: { line: 1, column: 4 } }]
+        });
+        const lookup: DefinitionLookup = {
+            async findDefinitions() {
+                return [
+                    { filePath: 'file:///variantB/a.h', line: 3, column: 0 },
+                    { filePath: 'file:///variantA/a.h', line: 7, column: 0 }
+                ];
+            },
+            async describe() { return variableInfo('int'); },
+            isExcluded: candidate => candidate.filePath.includes('variantB')
+        };
+
+        await resolveDefinitions(result, lookup);
+        assert.equal(result.outputs[0].definition?.filePath, 'file:///variantA/a.h');
+        // 除外後は1件なので、複数候補の扱いにはしない
+        assert.equal(result.outputs[0].definition?.ambiguous, undefined);
+    });
+
+    test('すべて除外された場合は定義なしとして扱う', async () => {
+        const result = makeResult({
+            outputs: [{ name: 'g_count', type: '(推定)', details: '', usage: { line: 1, column: 4 } }]
+        });
+        const lookup: DefinitionLookup = {
+            async findDefinitions() { return [{ filePath: 'file:///variantB/a.h', line: 3, column: 0 }]; },
+            async describe() { return variableInfo('int'); },
+            isExcluded: () => true
+        };
+
+        await resolveDefinitions(result, lookup);
+        assert.equal(result.outputs[0].definition, undefined);
+        assert.equal(result.outputs[0].type, '(推定)');
+    });
+});
+
+describe('resolveDefinitions: 定義ジャンプの診断 (v3.2.0)', () => {
+    /** 手がかりなし（エラー・警告が無い状態） */
+    const NO_SIGNALS = { diagnostics: [], errorSquiggles: 'enabledIfIncludesResolve', cppToolsActive: true };
+
+    test('手がかりを渡さない場合は判定しない（従来どおり）', async () => {
+        const result = makeResult({
+            outputs: [{ name: 'g_count', type: '(推定)', details: '', usage: { line: 1, column: 4 } }]
+        });
+        await resolveDefinitions(result, makeLookup({ 1: { info: variableInfo('int') } }));
+        assert.equal(result.outputs[0].diagnosis, undefined);
+    });
+
+    test('解決できた項目は正常と判定する', async () => {
+        const result = makeResult({
+            outputs: [{ name: 'g_count', type: '(推定)', details: '', usage: { line: 1, column: 4 } }]
+        });
+        await resolveDefinitions(result, makeLookup({ 1: { info: variableInfo('int') } }), NO_SIGNALS);
+        assert.equal(result.outputs[0].diagnosis?.category, 'ok');
+    });
+
+    test('除外で無くなった場合は、候補なしではなく excludePaths と判定する', async () => {
+        const result = makeResult({
+            outputs: [{ name: 'g_count', type: '(推定)', details: '', usage: { line: 1, column: 4 } }]
+        });
+        const lookup: DefinitionLookup = {
+            async findDefinitions() { return [{ filePath: 'file:///variantB/a.h', line: 3, column: 0 }]; },
+            async describe() { return variableInfo('int'); },
+            isExcluded: () => true
+        };
+        await resolveDefinitions(result, lookup, NO_SIGNALS);
+        assert.equal(result.outputs[0].diagnosis?.appCause, 'excluded');
+        assert.equal(result.outputs[0].diagnosis?.candidateCount, 1);
+    });
+
+    test('候補が複数の場合は ③ と判定する', async () => {
+        const result = makeResult({
+            outputs: [{ name: 'g_count', type: '(推定)', details: '', usage: { line: 1, column: 4 } }]
+        });
+        await resolveDefinitions(result, makeLookup({ 1: { info: variableInfo('int'), candidates: 2 } }), NO_SIGNALS);
+        assert.equal(result.outputs[0].diagnosis?.appCause, 'multiple');
+    });
+
+    test('宣言を読み取れない場合は ④ と判定する', async () => {
+        const result = makeResult({
+            outputs: [{ name: 'g_count', type: '(推定)', details: '', usage: { line: 1, column: 4 } }]
+        });
+        const lookup: DefinitionLookup = {
+            async findDefinitions() { return [{ filePath: 'file:///a.h', line: 3, column: 0 }]; },
+            async describe() { return { kind: 'unknown' as const, type: '', arrayDimensions: [] }; }
+        };
+        await resolveDefinitions(result, lookup, NO_SIGNALS);
+        assert.equal(result.outputs[0].diagnosis?.appCause, 'unreadable');
+    });
+
+    test('定義プロバイダの例外は「判定できず」とし、処理は継続する', async () => {
+        const result = makeResult({
+            outputs: [{ name: 'g_count', type: '(推定)', details: '', usage: { line: 1, column: 4 } }]
+        });
+        const lookup: DefinitionLookup = {
+            async findDefinitions() { throw new Error('provider error'); },
+            async describe() { return null; }
+        };
+        await resolveDefinitions(result, lookup, NO_SIGNALS);
+        assert.equal(result.outputs[0].diagnosis?.category, 'unknown');
+    });
+
+    test('参照位置の単語が項目名と違う場合は ① と判定する', async () => {
+        const result = makeResult({
+            outputs: [{ name: 'g_tbl[].value', type: '(推定)', details: '', usage: { line: 1, column: 4 } }]
+        });
+        const lookup = { ...makeLookup({ 1: { info: variableInfo('int') } }), tokenAt: () => 'g_tbl' };
+        await resolveDefinitions(result, lookup, NO_SIGNALS);
+        assert.equal(result.outputs[0].diagnosis?.appCause, 'position');
+    });
+
+    test('判定には次元を埋める前の名前を使い、判定後の名前の変更に影響されない', async () => {
+        const result = makeResult({
+            outputs: [{ name: 'g_flat[]', type: '(推定)', details: '', usage: { line: 1, column: 4 } }]
+        });
+        const lookup = {
+            ...makeLookup({ 1: { info: variableInfo('int', { arrayDimensions: ['16'] }) } }),
+            tokenAt: () => 'g_flat'
+        };
+        await resolveDefinitions(result, lookup, NO_SIGNALS);
+        assert.equal(result.outputs[0].name, 'g_flat[16]');
+        assert.equal(result.outputs[0].diagnosis?.category, 'ok');
+    });
+
+    test('呼び出し関数も判定する（暗黙の宣言 → 原因4）', async () => {
+        const result = makeResult({
+            calledFunctions: [{ name: 'init_hw', usage: { line: 1, column: 4 } }]
+        });
+        const signals = {
+            ...NO_SIGNALS,
+            diagnostics: [{
+                line: 1, column: 4, endLine: 1, endColumn: 11,
+                severity: 'warning' as const, source: 'C/C++', code: '223',
+                message: 'function "init_hw" declared implicitly'
+            }]
+        };
+        await resolveDefinitions(result, makeLookup({}), signals);
+        assert.equal(result.calledFunctions[0].diagnosis?.category, 'implicit');
+        assert.equal(result.calledFunctions[0].type, '(推定)');
+    });
+
+    test('参照位置を持たない項目（戻り値など）は判定しない', async () => {
+        const result = makeResult({
+            outputs: [{ name: '戻り値 (return)', type: 'int', details: '', highlightable: false }]
+        });
+        await resolveDefinitions(result, makeLookup({}), NO_SIGNALS);
+        assert.equal(result.outputs[0].diagnosis, undefined);
+    });
+});

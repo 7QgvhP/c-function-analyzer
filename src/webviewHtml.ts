@@ -5,6 +5,7 @@
  * ヘッドレス環境（Node 単体）でテスト可能な状態を保っています。
  */
 import { AnalysisResult, DefinitionLocation, FunctionInfo, VariableInfo } from './analyzer';
+import type { DefinitionDiagnosis } from './definitionDiagnosis';
 import { WEBVIEW_STYLES } from './webviewStyles';
 
 /**
@@ -66,16 +67,48 @@ function renderDefinitionButton(definition?: DefinitionLocation): string {
 }
 
 /**
- * 同名ファイルが複数見つかった場合の注意マークを生成します。
+ * 定義の候補が複数見つかった場合の注意マークを生成します。
+ *
+ * 定義ジャンプの判定結果があれば、その説明をツールチップに出します。
  *
  * @param definition 定義位置（未特定の場合はマークを出力しません）
+ * @param diagnosis 定義ジャンプの判定結果
  * @returns 生成したHTML
  */
-function renderAmbiguousMark(definition?: DefinitionLocation): string {
+function renderAmbiguousMark(definition?: DefinitionLocation, diagnosis?: DefinitionDiagnosis): string {
     if (!definition || !definition.ambiguous) {
         return '';
     }
-    return '<span class="ambiguous-mark" title="同名のファイルが複数見つかりました。意図と異なる定義を参照している可能性があります。「定義へ」で実際に参照しているファイルを確認できます。">!</span>';
+    const title = diagnosis
+        ? diagnosisTooltip(diagnosis)
+        : '定義の候補が複数見つかりました。意図と異なる定義を参照している可能性があります。「定義へ」で実際に参照している場所を確認できます。';
+    return `<span class="ambiguous-mark" title="${title}">!</span>`;
+}
+
+/**
+ * 型名欄のHTMLを生成します。
+ *
+ * 定義ジャンプが正常でなかった項目は、マウスを乗せると原因の判定結果が出るようにします。
+ *
+ * @param type 型名（エスケープ済み）
+ * @param diagnosis 定義ジャンプの判定結果
+ * @returns 生成したHTML
+ */
+function renderTypeColumn(type: string, diagnosis?: DefinitionDiagnosis): string {
+    if (!diagnosis || diagnosis.category === 'ok') {
+        return `<span class="variable-type">${type}</span>`;
+    }
+    return `<span class="variable-type has-diagnosis" title="${diagnosisTooltip(diagnosis)}">${type}</span>`;
+}
+
+/**
+ * 判定結果をツールチップ用の文字列にします（HTMLエスケープ済み）。
+ *
+ * @param diagnosis 定義ジャンプの判定結果
+ * @returns 「分類名」と「説明」を改行でつないだ文字列
+ */
+function diagnosisTooltip(diagnosis: DefinitionDiagnosis): string {
+    return `${escapeHtml(diagnosis.label)}&#10;${escapeHtml(diagnosis.summary)}`;
 }
 
 /**
@@ -126,8 +159,8 @@ function renderVariableList(vars: VariableInfo[]): string {
                 <div class="variable-item" data-name="${name}" data-type="${type}" data-value="${value}" data-comment="${comment}" data-highlightable="${highlightable}"${renderDefinitionAttrs(v.definition)}>
                     <div class="variable-row">
                         <div class="variable-info">
-                            <span class="variable-type">${type}</span>
-                            <span class="variable-name">${name}</span>${renderAmbiguousMark(v.definition)}
+                            ${renderTypeColumn(type, v.diagnosis)}
+                            <span class="variable-name">${name}</span>${renderAmbiguousMark(v.definition, v.diagnosis)}
                             ${valueColumn}
                             ${commentColumn}
                         </div>
@@ -169,8 +202,8 @@ function renderCalledFunctions(funcs: FunctionInfo[]): string {
                 <div class="variable-item" data-name="${cleanName}" data-type="${type}" data-value="${value}" data-comment="${comment}" data-highlightable="true"${renderDefinitionAttrs(f.definition)}>
                     <div class="variable-row">
                         <div class="variable-info">
-                            <span class="variable-type">${type}</span>
-                            <span class="variable-name">${escapeHtml(f.name)}</span>${renderAmbiguousMark(f.definition)}
+                            ${renderTypeColumn(type, f.diagnosis)}
+                            <span class="variable-name">${escapeHtml(f.name)}</span>${renderAmbiguousMark(f.definition, f.diagnosis)}
                             ${valueColumn}
                             ${commentColumn}
                         </div>
@@ -317,7 +350,10 @@ ${WEBVIEW_STYLES}
         <h1 class="header-title">
             <span>${escapeHtml(result.functionName)}</span>
         </h1>
+        <div class="header-tools">
 ${renderCopyFormatSelector(copyFormat)}
+            <button class="diagnosis-button" title="定義ジャンプの結果と、うまくいかなかった項目の原因を出力パネルに表示します">定義の診断</button>
+        </div>
     </div>
 ${ambiguousNotice}
 
@@ -453,6 +489,13 @@ ${macroFunctions.length > 0 ? renderSection('macro-fn', 'マクロ関数', macro
         // 表示幅が変わると許容できる最大幅も変わるため、その都度収め直す
         applyCommentWidth(currentCommentWidth());
         window.addEventListener('resize', () => applyCommentWidth(currentCommentWidth()));
+
+        // 定義ジャンプの診断結果（出力パネル）を開く
+        document.querySelectorAll('.diagnosis-button').forEach(button => {
+            button.addEventListener('click', () => {
+                vscode.postMessage({ command: 'showDefinitionDiagnostics' });
+            });
+        });
 
         // コピー形式の切り替え
         document.querySelectorAll('.copy-format-option').forEach(button => {

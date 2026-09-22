@@ -6,6 +6,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import type { DefinitionDiagnosis } from '../src/definitionDiagnosis';
 import { AnalysisResult } from '../src/analyzer';
 import {
     clampCommentWidth,
@@ -723,5 +724,67 @@ describe('renderAnalysisHtml: コメント欄の幅', () => {
     test('区切り線のドラッグで幅を拡張機能へ通知する', () => {
         const html = renderAnalysisHtml(makeResult(), 'N');
         assert.ok(html.includes("command: 'setCommentWidth'"), '幅の通知を送ること');
+    });
+});
+
+describe('renderAnalysisHtml: 定義ジャンプの診断 (v3.2.0)', () => {
+    /**
+     * 判定結果を作ります。
+     *
+     * @param category 分類
+     * @param label 表示名
+     * @param summary 説明
+     * @returns 判定結果
+     */
+    function diagnosis(category: DefinitionDiagnosis['category'], label: string, summary: string): DefinitionDiagnosis {
+        return { category, label, summary, evidence: [], candidateCount: 0 };
+    }
+
+    test('ヘッダに「定義の診断」ボタンを出力し、押すと出力パネルを開くよう通知する', () => {
+        const html = renderAnalysisHtml(makeResult(), 'N');
+        assert.ok(html.includes('class="diagnosis-button"'), 'ボタンが出力されること');
+        assert.ok(html.includes("command: 'showDefinitionDiagnostics'"), '拡張機能へ通知する処理があること');
+    });
+
+    test('正常でない項目は、型名欄に原因のツールチップを出す', () => {
+        const html = renderAnalysisHtml(makeResult({
+            inputs: [{
+                name: 'g_offset', type: '(推定)', details: '',
+                diagnosis: diagnosis('config', '原因3: インクルード設定', '定義が見つかりません。"hal.h" を開けません')
+            }]
+        }), 'N');
+        assert.ok(html.includes('class="variable-type has-diagnosis"'), '印付きの型名欄になること');
+        assert.ok(html.includes('原因3: インクルード設定&#10;定義が見つかりません。&quot;hal.h&quot; を開けません'),
+            '分類名と説明が改行区切り・エスケープ済みで出ること');
+    });
+
+    test('正常な項目にはツールチップを出さない', () => {
+        const html = renderAnalysisHtml(makeResult({
+            inputs: [{ name: 'g_a', type: 'int', details: '', diagnosis: diagnosis('ok', '正常', '定義: a.h:1') }]
+        }), 'N');
+        // CSS にもクラス名が含まれるため、要素の class 属性で判定する
+        assert.ok(!html.includes('class="variable-type has-diagnosis"'), '印を付けないこと');
+        assert.ok(html.includes('<span class="variable-type">int</span>'), '通常の型名欄になること');
+    });
+
+    test('呼び出し関数にも原因のツールチップを出す', () => {
+        const html = renderAnalysisHtml(makeResult({
+            calledFunctions: [{
+                name: 'init_hw', type: '(推定)',
+                diagnosis: diagnosis('implicit', '原因4: プロトタイプなし', '呼び出し箇所で関数が暗黙に宣言されています')
+            }]
+        }), 'N');
+        assert.ok(html.includes('title="原因4: プロトタイプなし&#10;呼び出し箇所で関数が暗黙に宣言されています"'));
+    });
+
+    test('候補が複数の注意マークには、判定結果の説明を出す', () => {
+        const html = renderAnalysisHtml(makeResult({
+            inputs: [{
+                name: 'g_a', type: 'int', details: '',
+                definition: { filePath: 'file:///a.h', line: 1, column: 0, ambiguous: true },
+                diagnosis: diagnosis('app', '原因1-③: 候補が複数', '候補が2件あり、先頭（a.h:2）を採用しました')
+            }]
+        }), 'N');
+        assert.ok(html.includes('<span class="ambiguous-mark" title="原因1-③: 候補が複数&#10;候補が2件あり、先頭（a.h:2）を採用しました">!</span>'));
     });
 });

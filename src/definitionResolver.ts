@@ -15,6 +15,7 @@ import {
     SourcePosition,
     VariableInfo
 } from './analyzer';
+import { diagnoseDefinition, EditorSignals, LookupRecord } from './definitionDiagnosis';
 
 /** 定義位置の候補 */
 export interface DefinitionCandidate {
@@ -29,12 +30,28 @@ export interface DefinitionCandidate {
 /** 定義位置を解決するための依存 */
 export interface DefinitionLookup {
     /**
-     * 参照位置から定義位置の候補を返します。
-     * 設定 `excludePaths` による除外は、この中で適用済みであることを想定します。
+     * 参照位置から定義位置の候補を返します（excludePaths による除外前）。
+     *
+     * 除外は `isExcluded` で行います。除外前の件数を把握し、「候補が無かった」のか
+     * 「除外で無くなった」のかを診断で区別するためです。
      */
     findDefinitions(usage: SourcePosition): Promise<DefinitionCandidate[]>;
     /** 定義位置にある宣言の情報を読み取ります */
     describe(candidate: DefinitionCandidate): Promise<DefinitionInfo | null>;
+    /** 候補が設定 `excludePaths` により除外されるかを判定します（省略時は除外しない） */
+    isExcluded?(candidate: DefinitionCandidate): boolean;
+    /** 参照位置にある単語を返します（診断で位置のずれを検出するために使う。省略可） */
+    tokenAt?(usage: SourcePosition): string | undefined;
+}
+
+/** 定義位置の解決結果 */
+interface Resolution {
+    /** 採用した候補 */
+    candidate: DefinitionCandidate;
+    /** 候補の位置にある宣言の情報 */
+    info: DefinitionInfo;
+    /** 候補が複数あったか */
+    ambiguous: boolean;
 }
 
 /** 型名を特定できなかった項目に表示する文字列（analyzer.ts と揃える） */
@@ -46,12 +63,17 @@ const UNKNOWN_TYPE = '(推定)';
  * 参照位置を持たない項目（引数そのもの・ローカル変数・戻り値）は、現在のファイルだけで
  * 型もコメントも分かるため対象外です。
  *
+ * `signals` を渡した場合は、項目ごとに定義ジャンプの結果と原因を判定し、
+ * 項目の `diagnosis` に記録します。
+ *
  * @param result 解析結果（この関数が直接書き換えます）
  * @param lookup 定義位置の解決手段
+ * @param signals 原因の判定に使うエディタ側の手がかり（省略時は判定しない）
  */
 export async function resolveDefinitions(
     result: AnalysisResult,
-    lookup: DefinitionLookup
+    lookup: DefinitionLookup,
+    signals?: EditorSignals
 ): Promise<void> {
     const macroVariables = result.macroVariables ?? [];
     const macroFunctions = result.macroFunctions ?? [];
@@ -70,13 +92,13 @@ export async function resolveDefinitions(
 
     for (const list of variableLists) {
         for (const item of list) {
-            await applyToVariable(item, lookup, typeNames, movedToMacro, list !== macroVariables);
+            await applyToVariable(item, lookup, typeNames, movedToMacro, list !== macroVariables, signals);
         }
     }
 
     for (const list of [result.calledFunctions, macroFunctions]) {
         for (const item of list) {
-            await applyToFunction(item, lookup, typeNames);
+            await applyToFunction(item, lookup, typeNames, signals);
         }
     }
 
@@ -91,15 +113,18 @@ export async function resolveDefinitions(
  * @param typeNames 型名だと判明した名前の記録先
  * @param movedToMacro マクロだと判明した項目の記録先
  * @param canBecomeMacro マクロへ移し替える対象か（マクロ変数の一覧では不要）
+ * @param signals 原因の判定に使うエディタ側の手がかり（省略時は判定しない）
  */
 async function applyToVariable(
     item: VariableInfo,
     lookup: DefinitionLookup,
     typeNames: Set<string>,
     movedToMacro: VariableInfo[],
-    canBecomeMacro: boolean
+    canBecomeMacro: boolean,
+    signals?: EditorSignals
 ): Promise<void> {
-    const resolved = await resolve(item.usage, lookup);
+    const { resolved, record } = await resolve(item.usage, lookup);
+    recordDiagnosis(item, record, signals);
     if (!resolved) {
         return;
     }
@@ -201,7 +226,7 @@ async function describeAt(
     position: SourcePosition,
     lookup: DefinitionLookup
 ): Promise<DefinitionInfo | null> {
-    const resolved = await resolve(position, lookup);
+    const { resolved } = await resolve(position, lookup);
     return resolved ? resolved.info : null;
 }
 
@@ -237,13 +262,16 @@ function applyVariableType(item: VariableInfo, info: DefinitionInfo): void {
  * @param item 対象の項目
  * @param lookup 定義位置の解決手段
  * @param typeNames 型名だと判明した名前の記録先
+ * @param signals 原因の判定に使うエディタ側の手がかり（省略時は判定しない）
  */
 async function applyToFunction(
     item: FunctionInfo,
     lookup: DefinitionLookup,
-    typeNames: Set<string>
+    typeNames: Set<string>,
+    signals?: EditorSignals
 ): Promise<void> {
-    const resolved = await resolve(item.usage, lookup);
+    const { resolved, record } = await resolve(item.usage, lookup);
+    recordDiagnosis(item, record, signals);
     if (!resolved) {
         return;
     }
@@ -277,42 +305,85 @@ async function applyToFunction(
 }
 
 /**
+ * 項目の定義ジャンプの結果と原因を判定し、項目に記録します。
+ *
+ * 判定には、定義位置を書き換える前の名前を使います（配列の次元を埋める前の状態）。
+ *
+ * @param item 対象の項目
+ * @param record 定義検索の経過（参照位置が無く検索しなかった場合は未設定）
+ * @param signals エディタ側の手がかり（省略時は判定しない）
+ */
+function recordDiagnosis(
+    item: VariableInfo | FunctionInfo,
+    record: LookupRecord | undefined,
+    signals: EditorSignals | undefined
+): void {
+    if (!signals || !record || !item.usage) {
+        return;
+    }
+    item.diagnosis = diagnoseDefinition(item.name, item.usage, record, signals);
+}
+
+/**
  * 参照位置から定義位置と宣言情報を求めます。
+ *
+ * 解決できたかどうかに加え、原因の判定に使う経過（候補の件数・除外・読み取りの成否）を返します。
  *
  * @param usage 参照位置（未設定の場合は解決しません）
  * @param lookup 定義位置の解決手段
- * @returns 解決結果。解決できない場合は null
+ * @returns 解決結果（解決できない場合は null）と、定義検索の経過（検索しなかった場合は未設定）
  */
 async function resolve(
     usage: SourcePosition | undefined,
     lookup: DefinitionLookup
-): Promise<{ candidate: DefinitionCandidate; info: DefinitionInfo; ambiguous: boolean } | null> {
+): Promise<{ resolved: Resolution | null; record?: LookupRecord }> {
     if (!usage) {
-        return null;
+        return { resolved: null };
     }
+
+    const tokenAtUsage = lookup.tokenAt ? lookup.tokenAt(usage) : undefined;
 
     let candidates: DefinitionCandidate[];
     try {
         candidates = await lookup.findDefinitions(usage);
     } catch {
         // 定義プロバイダが応答しない場合は解決せず、推定表示のままにする
-        return null;
-    }
-    if (candidates.length === 0) {
-        return null;
+        return {
+            resolved: null,
+            record: { outcome: 'providerError', candidates: [], excluded: [], tokenAtUsage }
+        };
     }
 
+    // excludePaths に該当する候補を取り除く（残りが無ければ「定義なし」）
+    const excluded = lookup.isExcluded
+        ? candidates.filter(candidate => lookup.isExcluded!(candidate))
+        : [];
+    const kept = candidates.filter(candidate => !excluded.includes(candidate));
+    const base = { candidates, excluded, tokenAtUsage };
+
+    if (kept.length === 0) {
+        return {
+            resolved: null,
+            record: { ...base, outcome: candidates.length === 0 ? 'noCandidate' : 'allExcluded' }
+        };
+    }
+
+    const chosen = kept[0];
     let info: DefinitionInfo | null;
     try {
-        info = await lookup.describe(candidates[0]);
+        info = await lookup.describe(chosen);
     } catch {
         info = null;
     }
     if (!info || info.kind === 'unknown') {
-        return null;
+        return { resolved: null, record: { ...base, outcome: 'unreadable', chosen } };
     }
 
-    return { candidate: candidates[0], info, ambiguous: candidates.length > 1 };
+    const ambiguous = kept.length > 1;
+    return {
+        resolved: { candidate: chosen, info, ambiguous },
+        record: { ...base, outcome: ambiguous ? 'ambiguous' : 'resolved', chosen }
+    };
 }
 
 /**

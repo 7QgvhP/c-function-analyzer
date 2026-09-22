@@ -57,12 +57,44 @@ export const WEBVIEW_STYLES = `
             color: var(--vscode-foreground, #cccccc);
         }
 
+        /* ヘッダの操作欄（コピー形式と「定義の診断」ボタン） */
+        .header-tools {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px 16px;
+            margin-top: 10px;
+        }
+
         /* コピー形式 */
         .copy-format {
             display: flex;
             align-items: center;
             gap: 5px;
-            margin-top: 10px;
+        }
+
+        /* 定義ジャンプの診断結果を開くボタン */
+        .diagnosis-button {
+            background: var(--surface);
+            border: 1px solid var(--border-color);
+            color: var(--text-muted);
+            padding: 2px 9px;
+            font-family: inherit;
+            font-size: 11px;
+            border-radius: 3px;
+            cursor: pointer;
+            transition: color 0.12s ease;
+        }
+
+        .diagnosis-button:hover {
+            color: var(--vscode-foreground, #cccccc);
+        }
+
+        /* 定義ジャンプが正常でなかった項目の型名欄（マウスを乗せると原因が出る） */
+        .variable-type.has-diagnosis {
+            cursor: help;
+            text-decoration: underline dotted;
+            text-underline-offset: 2px;
         }
 
         .copy-format-label {
