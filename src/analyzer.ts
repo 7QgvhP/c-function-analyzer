@@ -271,6 +271,14 @@ interface BodyAnalysis {
     /** 書き込まれているポインタ引数のアクセスパス */
     pointerWrites: Set<string>;
     /**
+     * 関数呼び出しの引数としてアドレスを渡しているアクセスパス。
+     *
+     * `set_value(&g_count)` の `g_count` や、配列名をそのまま渡した `fill(g_buf)` の
+     * `g_buf` が該当します。呼び出し先が書き込む可能性があるため、入力と出力の
+     * 両方に表示します（ローカル変数と値渡し引数は対象外）。
+     */
+    addressArgs: Set<string>;
+    /**
      * 各シンボルが現在のファイルで最初に現れる位置。
      *
      * 定義位置の解決（VS Code の定義プロバイダ呼び出し）の起点として使います。
@@ -2338,17 +2346,107 @@ function rememberUsage(
     into.set(name, { line: node.startPosition.row, column: node.startPosition.column });
 }
 
+/** アドレス渡しとして分類した項目の補足情報（入力側） */
+const ADDRESS_INPUT_DETAILS = '入力（アドレス渡し）';
+
+/** アドレス渡しとして分類した項目の補足情報（出力側） */
+const ADDRESS_OUTPUT_DETAILS = '出力（アドレス渡し）';
+
+/**
+ * 関数呼び出しの引数のうち、呼び出し先が書き込みうるもの（アドレス渡し）の出現箇所を集めます。
+ *
+ * 対象は次の2つです。呼び出し先の宣言は参照しないため、実際に書き込むかどうかは分かりません。
+ *
+ * | 書き方 | 例 |
+ * |---|---|
+ * | アドレス演算子 | `set_value(&g_count)`、`set_value(&g_cfg.mode)` |
+ * | 配列名をそのまま渡す（先頭要素のアドレス） | `fill(g_buf)` |
+ *
+ * ポインタ変数をそのまま渡す場合（`set_value(p)`）は、値の受け渡しと区別できないため対象外です。
+ *
+ * @param argumentList 呼び出しの引数リスト（argument_list）ノード
+ * @param fileScopeVars ファイルスコープで宣言されている変数（配列かどうかの判定に使用）
+ * @param into 見つけた出現箇所のノードIDの記録先
+ */
+function collectAddressArgumentNodes(
+    argumentList: Parser.SyntaxNode,
+    fileScopeVars: Map<string, DeclaredVar>,
+    into: Set<number>
+): void {
+    for (let i = 0; i < argumentList.namedChildCount; i++) {
+        const argument = unwrapArgumentExpression(argumentList.namedChild(i)!);
+        const addressed = addressOfTarget(argument);
+
+        if (addressed) {
+            into.add(addressed.id);
+            continue;
+        }
+
+        // 配列名は先頭要素のアドレスとして渡される
+        const declared = argument.type === 'identifier' ? fileScopeVars.get(argument.text) : undefined;
+        if (declared && declared.arrayDimensions.length > 0) {
+            into.add(argument.id);
+        }
+    }
+}
+
+/**
+ * 引数の式から、括弧とキャストを取り除いた中身を返します。
+ *
+ * @param node 引数の式
+ * @returns 取り除いた後の式
+ */
+function unwrapArgumentExpression(node: Parser.SyntaxNode): Parser.SyntaxNode {
+    let current = node;
+    for (;;) {
+        if (current.type === 'parenthesized_expression' && current.namedChildCount > 0) {
+            current = current.namedChild(0)!;
+            continue;
+        }
+        if (current.type === 'cast_expression') {
+            const value = current.childForFieldName('value');
+            if (!value) {
+                return current;
+            }
+            current = value;
+            continue;
+        }
+        return current;
+    }
+}
+
+/**
+ * アドレス演算子（`&`）が付いている場合に、その対象の式を返します。
+ *
+ * @param node 引数の式
+ * @returns `&` の対象。`&` でない場合は null
+ */
+function addressOfTarget(node: Parser.SyntaxNode): Parser.SyntaxNode | null {
+    if (node.type !== 'pointer_expression') {
+        return null;
+    }
+    const operator = node.childForFieldName('operator') || node.child(0);
+    if (!operator || operator.text !== '&') {
+        return null;
+    }
+    const argument = node.childForFieldName('argument');
+    return argument ? unwrapArgumentExpression(argument) : null;
+}
+
 /**
  * フェーズ4: 関数ボディを走査し、変数の宣言・参照・書き込み、および関数呼び出しを収集します。
  *
  * @param bodyNode 関数ボディ (compound_statement) ノード。存在しない場合は null
  * @param params フェーズ3で解析した引数リスト
+ * @param fileScopeFunctions ファイルスコープで宣言されている関数（関数名の値参照の判定に使用）
+ * @param fileScopeVars ファイルスコープで宣言されている変数（配列名の受け渡しの判定に使用）
  * @returns 収集した生データ
  */
 function analyzeBody(
     bodyNode: Parser.SyntaxNode | null,
     params: ParamInfo[],
-    fileScopeFunctions: Map<string, FunctionDeclaration>
+    fileScopeFunctions: Map<string, FunctionDeclaration>,
+    fileScopeVars: Map<string, DeclaredVar>
 ): BodyAnalysis {
     // 解析中に見つかったローカル変数、グローバル変数、呼び出し関数を格納するセット
     const localVars = new Map<string, DeclaredVar>(); // name -> 型名と宣言位置
@@ -2363,6 +2461,10 @@ function analyzeBody(
 
     // ポインタ引数の読み取り状況を追跡する
     const pointerReads = new Set<string>();
+
+    // 関数呼び出しの引数としてアドレスを渡しているアクセスパスと、その出現箇所
+    const addressArgs = new Set<string>();
+    const addressArgNodeIds = new Set<number>();
 
     // 定義位置の解決に使う、各シンボルの参照位置
     const usagePositions = new Map<string, SourcePosition>();
@@ -2387,6 +2489,12 @@ function analyzeBody(
                 if (funcNameNode && funcNameNode.type === 'identifier') {
                     calledFunctionsSet.add(funcNameNode.text);
                     rememberUsage(usagePositions, funcNameNode.text, funcNameNode);
+                }
+
+                // 呼び出し先が書き込みうる引数（アドレス渡し）の出現箇所を控える
+                const argumentList = node.childForFieldName('arguments');
+                if (argumentList) {
+                    collectAddressArgumentNodes(argumentList, fileScopeVars, addressArgNodeIds);
                 }
             }
         });
@@ -2440,10 +2548,13 @@ function analyzeBody(
                     // 定義位置の解決は、アクセスパスの最後のメンバから辿る
                     const targetNode = accessTargetNode(outerNode);
 
+                    // アドレスを渡しているだけの箇所は、値を読み取っているわけではない
+                    const isAddressArg = addressArgNodeIds.has(outerNode.id);
+
                     const targetParam = params.find(p => p.name === rootName);
                     if (targetParam && targetParam.isPointer) {
                         if (!isLhsNode(node)) {
-                            pointerReads.add(accessPath);
+                            (isAddressArg ? addressArgs : pointerReads).add(accessPath);
                             rememberUsage(usagePositions, accessPath, targetNode);
                             rememberSegments(segmentPositions, accessPath, outerNode);
                         }
@@ -2462,7 +2573,7 @@ function analyzeBody(
                         // 読み取り（右辺等）で出現しているかチェック
                         // 代入式の左辺として既に書き込み判定されていなければ、読み取り（入力）とみなす
                         if (!isLhsNode(node)) {
-                            globalVarReads.add(accessPath);
+                            (isAddressArg ? addressArgs : globalVarReads).add(accessPath);
                             rememberUsage(usagePositions, accessPath, targetNode);
                             rememberSegments(segmentPositions, accessPath, outerNode);
                         }
@@ -2480,7 +2591,8 @@ function analyzeBody(
         globalVarReads,
         globalVarWrites,
         pointerReads,
-        pointerWrites
+        pointerWrites,
+        addressArgs
     };
 }
 
@@ -2504,7 +2616,7 @@ function buildResult(
     const { functionName, returnType, params } = signature;
     const {
         localVars, calledFunctions, usagePositions, segmentPositions,
-        globalVarReads, globalVarWrites, pointerReads, pointerWrites
+        globalVarReads, globalVarWrites, pointerReads, pointerWrites, addressArgs
     } = body;
 
     const inputs: VariableInfo[] = [];
@@ -2600,7 +2712,29 @@ function buildResult(
                 });
             }
 
-            if (matchingWrites.length === 0 && matchingReads.length === 0) {
+            // アドレスを渡している箇所は、呼び出し先が書き込みうるため入力と出力の両方に出す
+            const matchingAddress = Array.from(addressArgs).filter(path => getRootName(path) === p.name);
+            matchingAddress.forEach(path => {
+                const resolvedPath = resolveAccessPath(path, paramVar, symbols);
+                const entry = (details: string): VariableInfo => ({
+                    name: resolvedPath.name,
+                    type: resolvedPath.type,
+                    details,
+                    definition: resolvedPath.definition,
+                    comment: resolvedPath.comment,
+                    usage: usagePositions.get(path),
+                    segments: segmentPositions.get(path)
+                });
+                // 実際の読み書きが判明している場合は、そちらの表示を優先する
+                if (!pointerReads.has(path)) {
+                    inputs.push(entry(ADDRESS_INPUT_DETAILS));
+                }
+                if (!pointerWrites.has(path)) {
+                    outputs.push(entry(ADDRESS_OUTPUT_DETAILS));
+                }
+            });
+
+            if (matchingWrites.length === 0 && matchingReads.length === 0 && matchingAddress.length === 0) {
                 inputs.push({
                     name: p.name,
                     type: fullType,
@@ -2709,6 +2843,38 @@ function buildResult(
     classifyGlobalVars(globalVarWrites, outputs, 'マクロ変数への書き込み', 'グローバル変数への書き込み');
     classifyGlobalVars(globalVarReads, inputs, 'マクロ変数からの読み取り', 'グローバル変数からの読み取り');
 
+    // アドレスを渡しているグローバル変数は、呼び出し先が書き込みうるため入力と出力の両方に出す。
+    // 引数（ポインタ引数のメンバなど）は上の params の処理で登録済みのため、ここでは除く。
+    const addressGlobals = new Set(
+        Array.from(addressArgs).filter(path => !params.some(p => p.name === getRootName(path)))
+    );
+    const withoutAlreadyClassified = (classified: Set<string>) =>
+        new Set(Array.from(addressGlobals).filter(path => !classified.has(path)));
+
+    // マクロはアドレスを渡しても書き込まれないため、出力側には出さない（入力側のみ）
+    const isMacroRoot = (path: string) => {
+        const rootName = getRootName(path);
+        return shouldClassifyAsMacro(
+            rootName,
+            symbols.macros.has(rootName),
+            symbols.vars.has(rootName),
+            classifyAllUppercaseAsMacros
+        );
+    };
+
+    classifyGlobalVars(
+        withoutAlreadyClassified(globalVarReads),
+        inputs,
+        'マクロ変数からの読み取り',
+        ADDRESS_INPUT_DETAILS
+    );
+    classifyGlobalVars(
+        new Set(Array.from(withoutAlreadyClassified(globalVarWrites)).filter(path => !isMacroRoot(path))),
+        outputs,
+        ADDRESS_OUTPUT_DETAILS,
+        ADDRESS_OUTPUT_DETAILS
+    );
+
     // 内部（ローカル）変数のリスト化
     // 名前は宣言名そのもの（添字を含まない）のため、配列の次元は型名側へ表示する
     const internalVariables: VariableInfo[] = [];
@@ -2770,7 +2936,12 @@ export function analyzeCFunction(
     }
 
     const signature = parseSignature(funcNode);
-    const body = analyzeBody(funcNode.childForFieldName('body'), signature.params, symbols.functions);
+    const body = analyzeBody(
+        funcNode.childForFieldName('body'),
+        signature.params,
+        symbols.functions,
+        symbols.vars
+    );
 
     return buildResult(funcNode, signature, body, symbols, classifyAllUppercaseAsMacros);
 }

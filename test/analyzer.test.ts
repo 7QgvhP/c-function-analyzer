@@ -2505,3 +2505,145 @@ int g_count;
         assert.equal(info.comment, undefined);
     });
 });
+
+describe('引数へのアドレス渡し (v3.3.0)', () => {
+    /** 共通のヘッダ（呼び出し先の宣言と、グローバル変数の宣言） */
+    const HEADER = `
+#define LIMIT 10
+struct Cfg { int mode; };
+extern int g_count;
+extern int g_buf[8];
+extern struct Cfg g_tbl[4];
+extern void set_value(int *p);
+extern void fill(int *a);
+extern int use(int *v);
+`;
+
+    /**
+     * ヘッダ付きで関数本体を解析します。
+     *
+     * @param body 関数本体の中身
+     * @returns 解析結果
+     */
+    const analyzeBody = (body: string) =>
+        analyzeOrThrow(`${HEADER}
+int work(struct Cfg *p, int n)
+{
+${body}
+    return 0;
+}
+`, 'int work(');
+
+    /**
+     * 指定した名前の項目の補足情報を返します。
+     *
+     * @param items 対象の一覧
+     * @param name 項目名
+     * @returns 補足情報（見つからない場合は undefined）
+     */
+    const detailsOf = (items: { name: string; details?: string }[], name: string) =>
+        items.find(i => i.name === name)?.details;
+
+    test('グローバル変数のアドレスを渡すと、入力と出力の両方に出す (v3.3.0)', async () => {
+        const r = await analyzeBody('    set_value(&g_count);');
+        assert.equal(detailsOf(r.inputs, 'g_count'), '入力（アドレス渡し）');
+        assert.equal(detailsOf(r.outputs, 'g_count'), '出力（アドレス渡し）');
+    });
+
+    test('配列名をそのまま渡した場合も、入力と出力の両方に出す (v3.3.0)', async () => {
+        const r = await analyzeBody('    fill(g_buf);');
+        // 添字なしで参照した配列は、次元が型名側に付くため名前は宣言名のまま
+        assert.equal(detailsOf(r.inputs, 'g_buf'), '入力（アドレス渡し）');
+        assert.equal(detailsOf(r.outputs, 'g_buf'), '出力（アドレス渡し）');
+        assert.equal(r.outputs.find(i => i.name === 'g_buf')?.type, 'int[8]');
+    });
+
+    test('構造体メンバのアドレスも対象とする (v3.3.0)', async () => {
+        const r = await analyzeBody('    set_value(&g_tbl[n].mode);');
+        assert.equal(detailsOf(r.inputs, 'g_tbl[4].mode'), '入力（アドレス渡し）');
+        assert.equal(detailsOf(r.outputs, 'g_tbl[4].mode'), '出力（アドレス渡し）');
+    });
+
+    test('ポインタ引数のメンバのアドレスも対象とする (v3.3.0)', async () => {
+        const r = await analyzeBody('    set_value(&p->mode);');
+        assert.equal(detailsOf(r.inputs, 'p->mode'), '入力（アドレス渡し）');
+        assert.equal(detailsOf(r.outputs, 'p->mode'), '出力（アドレス渡し）');
+    });
+
+    test('キャストや括弧が付いていても検出する (v3.3.0)', async () => {
+        const cast = await analyzeBody('    set_value((int *)&g_count);');
+        assert.equal(detailsOf(cast.outputs, 'g_count'), '出力（アドレス渡し）');
+        const paren = await analyzeBody('    set_value((&g_count));');
+        assert.equal(detailsOf(paren.outputs, 'g_count'), '出力（アドレス渡し）');
+    });
+
+    test('入れ子の呼び出しの引数でも検出する (v3.3.0)', async () => {
+        const r = await analyzeBody('    n = use(&g_count);');
+        assert.equal(detailsOf(r.outputs, 'g_count'), '出力（アドレス渡し）');
+    });
+
+    test('実際の読み取りがある場合は、入力側はそちらを優先する (v3.3.0)', async () => {
+        const r = await analyzeBody(`    n = g_count;
+    set_value(&g_count);`);
+        assert.equal(detailsOf(r.inputs, 'g_count'), 'グローバル変数からの読み取り');
+        assert.equal(detailsOf(r.outputs, 'g_count'), '出力（アドレス渡し）');
+        assert.equal(r.inputs.filter(i => i.name === 'g_count').length, 1, '入力に重複しないこと');
+    });
+
+    test('実際の書き込みがある場合は、出力側はそちらを優先する (v3.3.0)', async () => {
+        const r = await analyzeBody(`    g_count = 1;
+    set_value(&g_count);`);
+        assert.equal(detailsOf(r.inputs, 'g_count'), '入力（アドレス渡し）');
+        assert.equal(detailsOf(r.outputs, 'g_count'), 'グローバル変数への書き込み');
+        assert.equal(r.outputs.filter(i => i.name === 'g_count').length, 1, '出力に重複しないこと');
+    });
+
+    test('複数の呼び出しに渡しても重複しない (v3.3.0)', async () => {
+        const r = await analyzeBody(`    set_value(&g_count);
+    use(&g_count);`);
+        assert.equal(r.outputs.filter(i => i.name === 'g_count').length, 1);
+    });
+
+    test('ローカル変数のアドレスは入出力に出さない (v3.3.0)', async () => {
+        const r = await analyzeBody(`    int local;
+    int buf[4];
+    set_value(&local);
+    fill(buf);`);
+        assert.ok(!names(r.inputs).includes('local'), 'local が入力に出ないこと');
+        assert.ok(!names(r.outputs).includes('local'), 'local が出力に出ないこと');
+        assert.ok(!names(r.outputs).includes('buf'), 'ローカル配列が出力に出ないこと');
+        assert.ok(names(r.internalVariables).includes('local'), '内部変数には出ること');
+    });
+
+    test('値渡し引数のアドレスは入出力に出さない (v3.3.0)', async () => {
+        const r = await analyzeBody('    set_value(&n);');
+        assert.equal(r.outputs.filter(i => i.name === 'n').length, 0);
+    });
+
+    test('ポインタ変数をそのまま渡した場合は対象外（従来どおり読み取り） (v3.3.0)', async () => {
+        const r = await analyzeBody('    set_value(p);');
+        assert.equal(detailsOf(r.inputs, 'p'), '入力引数（ポインタ読み取りあり）');
+        assert.equal(r.outputs.filter(i => i.name === 'p').length, 0);
+    });
+
+    test('呼び出しの引数以外のアドレス演算子は従来どおり読み取りとする (v3.3.0)', async () => {
+        const r = await analyzeBody(`    int *q = &g_count;
+    (void)q;`);
+        assert.equal(detailsOf(r.inputs, 'g_count'), 'グローバル変数からの読み取り');
+        assert.equal(r.outputs.filter(i => i.name === 'g_count').length, 0);
+    });
+
+    test('マクロのアドレスは出力に出さず、マクロ変数として1件だけ出す (v3.3.0)', async () => {
+        const r = await analyzeBody('    set_value(&LIMIT);');
+        const macros = (r.macroVariables || []).filter(m => m.name === 'LIMIT');
+        assert.equal(macros.length, 1, 'マクロ変数が重複しないこと');
+        assert.equal(macros[0].details, 'マクロ変数からの読み取り');
+        assert.equal(r.outputs.filter(i => i.name === 'LIMIT').length, 0);
+    });
+
+    test('アドレス渡しの項目にも参照位置を記録する（定義解決のため） (v3.3.0)', async () => {
+        const r = await analyzeBody('    set_value(&g_count);');
+        const output = r.outputs.find(i => i.name === 'g_count');
+        assert.ok(output?.usage, '参照位置が記録されていること');
+    });
+});
