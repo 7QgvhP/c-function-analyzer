@@ -678,24 +678,24 @@ void work(void) {
 });
 
 describe('フェーズ5: 大文字マクロ分類', () => {
-    test('大文字のみの呼び出しをマクロ関数に分類する (v1.3.0)', async () => {
+    test('定義が見つからない大文字の呼び出しは通常の呼び出し関数とする (v3.5.0)', async () => {
         const r = await analyzeOrThrow(`
 void work(void) {
     LOG_MSG("hello");
 }
 `, 'void work(');
-        assert.ok(names(r.macroFunctions ?? []).includes('LOG_MSG'), `マクロ関数に LOG_MSG が含まれること: ${names(r.macroFunctions ?? [])}`);
-        assert.ok(!names(r.calledFunctions).includes('LOG_MSG'), '通常の呼び出し関数には含まれないこと');
+        assert.ok(names(r.calledFunctions).includes('LOG_MSG'), `呼び出し関数に LOG_MSG が含まれること: ${names(r.calledFunctions)}`);
+        assert.ok(!names(r.macroFunctions ?? []).includes('LOG_MSG'), 'マクロ関数には含まれないこと');
     });
 
-    test('大文字のみのグローバル参照をマクロ変数に分類する (v1.3.0)', async () => {
+    test('定義が見つからない大文字のグローバル参照は通常の入力変数とする (v3.5.0)', async () => {
         const r = await analyzeOrThrow(`
 void work(void) {
     int v = MAX_LIMIT;
 }
 `, 'void work(');
-        assert.ok(names(r.macroVariables ?? []).includes('MAX_LIMIT'), `マクロ変数に MAX_LIMIT が含まれること: ${names(r.macroVariables ?? [])}`);
-        assert.ok(!names(r.inputs).includes('MAX_LIMIT'), '入力変数には含まれないこと');
+        assert.ok(names(r.inputs).includes('MAX_LIMIT'), `入力変数に MAX_LIMIT が含まれること: ${names(r.inputs)}`);
+        assert.ok(!names(r.macroVariables ?? []).includes('MAX_LIMIT'), 'マクロ変数には含まれないこと');
     });
 
     test('マクロ値の末尾の行コメントを型名に含めない (v2.10.1)', async () => {
@@ -835,15 +835,16 @@ void work(void) {
         );
     });
 
-    test('定義が見つからない大文字識別子は従来どおり推定でマクロとする (v2.11.0)', async () => {
+    test('定義が見つからない大文字識別子を名前から推定しない (v3.5.0)', async () => {
         const r = await analyzeOrThrow(`
 void work(int v) {
     use(v + UNKNOWN_LIMIT);
 }
 `, 'void work(');
-        const m = findVar(r.macroVariables ?? [], 'UNKNOWN_LIMIT');
-        assert.ok(m, `マクロ変数に UNKNOWN_LIMIT が含まれること: ${names(r.macroVariables ?? [])}`);
-        assert.equal(m.type, '(推定)');
+        assert.deepEqual(r.macroVariables ?? [], [], 'マクロ変数には分類しないこと');
+        const v = findVar(r.inputs, 'UNKNOWN_LIMIT');
+        assert.ok(v, `入力変数に UNKNOWN_LIMIT が含まれること: ${names(r.inputs)}`);
+        assert.equal(v.type, '(推定)', '型は特定できないままとなること');
     });
 
     test('マクロ定義は変数宣言より優先する (v2.11.0)', async () => {
@@ -868,7 +869,7 @@ int check(int v) {
 int check(int v) {
     return v + KNOWN_MACRO + UNKNOWN_MACRO;
 }
-`, 'int check(', false);
+`, 'int check(');
         assert.ok(
             names(r.macroVariables ?? []).includes('KNOWN_MACRO'),
             `定義があるものはマクロ変数となること: ${names(r.macroVariables ?? [])}`
@@ -885,7 +886,7 @@ void work(void) {
     int v = MAX_LIMIT;
     LOG_MSG("hello");
 }
-`, 'void work(', false);
+`, 'void work(');
         assert.ok(names(r.inputs).includes('MAX_LIMIT'), `入力に MAX_LIMIT が含まれること: ${names(r.inputs)}`);
         assert.ok(names(r.calledFunctions).includes('LOG_MSG'), `呼び出し関数に LOG_MSG が含まれること: ${names(r.calledFunctions)}`);
         assert.deepEqual(r.macroVariables, [], 'マクロ変数は空であること');
@@ -1525,7 +1526,7 @@ void work(void) {
 });
 
 describe('フェーズ5: 定義が見つからない場合の型表示', () => {
-    test('変数・関数・マクロで同じ表記になる (v2.17.0)', async () => {
+    test('変数・関数で同じ表記になる (v2.17.0)', async () => {
         const r = await analyzeOrThrow(`
 void work(void) {
     unknown_fn();
@@ -1534,11 +1535,12 @@ void work(void) {
     UNKNOWN_MACRO_VAR = 2;
 }
 `, 'void work(');
+        // 定義が見つからない名前は、大小によらず通常の変数・関数として扱う
         const types = [
             r.calledFunctions.find(f => f.name === 'unknown_fn')?.type,
-            r.macroFunctions?.find(f => f.name === 'UNKNOWN_MACRO_FN')?.type,
+            r.calledFunctions.find(f => f.name === 'UNKNOWN_MACRO_FN')?.type,
             findVar(r.outputs, 'unknown_global')?.type,
-            r.macroVariables?.find(v => v.name === 'UNKNOWN_MACRO_VAR')?.type
+            findVar(r.outputs, 'UNKNOWN_MACRO_VAR')?.type
         ];
         assert.deepEqual(types, ['(推定)', '(推定)', '(推定)', '(推定)']);
     });
@@ -1728,7 +1730,7 @@ enum Color { red = 3 };
 void work(void) {
     int a = red;
 }
-`, 'void work(', false);
+`, 'void work(');
         const v = r.macroVariables?.find(x => x.name === 'red');
         assert.ok(v, `マクロ変数に red が含まれること: ${names(r.macroVariables || [])}`);
         assert.equal(v.value, '3');
@@ -1771,8 +1773,8 @@ void work(void) {
     int a = LOCAL_ONLY;
 }
 `, 'void work(');
-        const v = r.macroVariables?.find(x => x.name === 'LOCAL_ONLY');
-        assert.equal(v?.type, '(推定)', 'ローカルな enum は定義として使わない');
+        assert.deepEqual(r.macroVariables ?? [], [], 'ローカルな enum は定義として使わない');
+        assert.equal(findVar(r.inputs, 'LOCAL_ONLY')?.type, '(推定)', '型は特定できないままとなること');
     });
 
     test('#ifdef の内側の enum も収集する (v2.18.0)', async () => {
@@ -2677,32 +2679,32 @@ int work(int n)
     });
 
     test('merged では読み取りのマクロを入力変数に含める (v3.4.0)', async () => {
-        const r = await analyzeOrThrow(SOURCE, 'int work(', true, 'merged');
+        const r = await analyzeOrThrow(SOURCE, 'int work(', 'merged');
         assert.ok(names(r.inputs).includes('LIMIT'), 'LIMIT が入力変数に出ること');
         assert.equal(findVar(r.inputs, 'LIMIT')?.type, 'MACRO');
         assert.equal(findVar(r.inputs, 'LIMIT')?.value, '10', '定義値は保持されること');
     });
 
     test('merged では書き込みのマクロを出力変数に含める (v3.4.0)', async () => {
-        const r = await analyzeOrThrow(SOURCE, 'int work(', true, 'merged');
+        const r = await analyzeOrThrow(SOURCE, 'int work(', 'merged');
         assert.ok(names(r.outputs).includes('PORT1'), 'PORT1 が出力変数に出ること');
         assert.equal(findVar(r.outputs, 'PORT1')?.type, 'MACRO');
     });
 
     test('merged ではマクロ関数を呼び出し関数に含める (v3.4.0)', async () => {
-        const r = await analyzeOrThrow(SOURCE, 'int work(', true, 'merged');
+        const r = await analyzeOrThrow(SOURCE, 'int work(', 'merged');
         assert.deepEqual(names(r.calledFunctions).sort(), ['SQ', 'calc']);
         assert.equal(r.calledFunctions.find(f => f.name === 'SQ')?.type, 'MACRO');
     });
 
     test('merged ではマクロの分類を空にする (v3.4.0)', async () => {
-        const r = await analyzeOrThrow(SOURCE, 'int work(', true, 'merged');
+        const r = await analyzeOrThrow(SOURCE, 'int work(', 'merged');
         assert.deepEqual(r.macroVariables ?? [], []);
         assert.deepEqual(r.macroFunctions ?? [], []);
     });
 
     test('merged でも列挙子は enum のまま入力変数に含める (v3.4.0)', async () => {
-        const r = await analyzeOrThrow(SOURCE, 'int work(', true, 'merged');
+        const r = await analyzeOrThrow(SOURCE, 'int work(', 'merged');
         assert.equal(findVar(r.inputs, 'MODE_ON')?.type, 'enum');
         assert.equal(findVar(r.inputs, 'MODE_ON')?.value, '1');
     });
@@ -2714,9 +2716,10 @@ int work(int n)
     return n + UNKNOWN_LIMIT;
 }
 `;
+        // 定義が見つからない名前はマクロとみなさないため、どちらでも入力変数に出る
         const separate = await analyzeOrThrow(source, 'int work(');
-        assert.equal(findVar(separate.macroVariables ?? [], 'UNKNOWN_LIMIT')?.type, '(推定)');
-        const merged = await analyzeOrThrow(source, 'int work(', true, 'merged');
+        assert.equal(findVar(separate.inputs, 'UNKNOWN_LIMIT')?.type, '(推定)');
+        const merged = await analyzeOrThrow(source, 'int work(', 'merged');
         assert.equal(findVar(merged.inputs, 'UNKNOWN_LIMIT')?.type, '(推定)');
     });
 });

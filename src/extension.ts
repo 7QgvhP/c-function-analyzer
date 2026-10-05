@@ -87,15 +87,13 @@ export async function activate(context: vscode.ExtensionContext) {
             // （GLOBAL BYTE hoge; のような修飾子マクロ付き宣言は必要に応じて修復する）
             const tree = parseWithModifierMacroRepair(parser, document.getText());
 
-            // VS Codeの設定からマクロ分類オプションを取得
-            const config = vscode.workspace.getConfiguration('c-function-analyzer');
-            const classifyAllUppercaseAsMacros = config.get<boolean>('classifyAllUppercaseAsMacros', true);
             // マクロを独立した分類に出すか、入力変数・出力変数・呼び出し関数に含めるか
+            const config = vscode.workspace.getConfiguration('c-function-analyzer');
             const macroDisplay: MacroDisplay =
                 config.get<string>('macroDisplay', 'separate') === 'merged' ? 'merged' : 'separate';
 
             // 現在のファイルだけで分かる範囲を解析する
-            const result = analyzeCFunction(tree, cursorLine, classifyAllUppercaseAsMacros, macroDisplay);
+            const result = analyzeCFunction(tree, cursorLine, macroDisplay);
 
             if (!result) {
                 // 関数定義の関数名や引数宣言がある行以外で実行された場合はインフォメーションを表示

@@ -1670,35 +1670,6 @@ export function listStructDefinitionNames(rootNode: Parser.SyntaxNode): string[]
     return [...collectStructDefinitions(rootNode).keys()];
 }
 
-/**
- * シンボルをマクロとして分類すべきか判定します。
- *
- * 収集した定義が見つかった場合はそれに従います（マクロ定義はプリプロセッサ段階で
- * 展開されるため、変数・関数の宣言より優先します）。
- * 定義が見つからない場合のみ、名前が大文字のみかどうかで推定します
- * （システムヘッダ内の定義など、探索対象外のシンボルが該当します）。
- *
- * @param name シンボル名
- * @param hasMacroDefinition 同名のマクロ定義が見つかったか
- * @param hasSymbolDeclaration 同名の変数宣言または関数宣言が見つかったか
- * @param classifyAllUppercaseAsMacros 定義不明時に大文字のみの識別子をマクロとみなすか
- * @returns マクロとして分類する場合は true
- */
-function shouldClassifyAsMacro(
-    name: string,
-    hasMacroDefinition: boolean,
-    hasSymbolDeclaration: boolean,
-    classifyAllUppercaseAsMacros: boolean
-): boolean {
-    if (hasMacroDefinition) {
-        return true;
-    }
-    if (hasSymbolDeclaration) {
-        return false;
-    }
-    return classifyAllUppercaseAsMacros && isAllUppercase(name);
-}
-
 /** 型指定子・型修飾子として現れるC言語のキーワード */
 const TYPE_KEYWORDS = new Set([
     'void', 'char', 'short', 'int', 'long', 'float', 'double',
@@ -2622,7 +2593,6 @@ function analyzeBody(
  * @param signature フェーズ3のシグネチャ解析結果
  * @param body フェーズ4のボディ解析結果
  * @param symbols フェーズ1で収集したファイルスコープのシンボル情報
- * @param classifyAllUppercaseAsMacros 大文字のみの識別子をマクロとして分類するか
  * @param macroDisplay マクロ変数・マクロ関数の表示方法
  * @returns 最終的な解析結果
  */
@@ -2631,7 +2601,6 @@ function buildResult(
     signature: SignatureInfo,
     body: BodyAnalysis,
     symbols: FileScopeSymbols,
-    classifyAllUppercaseAsMacros: boolean,
     macroDisplay: MacroDisplay = 'separate'
 ): AnalysisResult {
     const { functionName, returnType, params } = signature;
@@ -2671,7 +2640,8 @@ function buildResult(
         }
 
         // 定義が見つかればそれに従い、見つからなければ大文字かどうかで推定する
-        if (shouldClassifyAsMacro(func, macro !== undefined, declared !== undefined, classifyAllUppercaseAsMacros)) {
+        // マクロ定義が見つかった場合のみマクロ関数として分類する
+        if (macro !== undefined) {
             // マクロ関数には戻り値の型がないため、変数側と同じく macro と表示する
             info.type = formatMacroType(macro);
             if (macro && macro.value) {
@@ -2817,7 +2787,8 @@ function buildResult(
             }
 
             // 定義が見つかればそれに従い、見つからなければ大文字かどうかで推定する
-            if (shouldClassifyAsMacro(rootName, macro !== undefined, declared !== undefined, classifyAllUppercaseAsMacros)) {
+            // マクロ定義が見つかった場合のみマクロ変数として分類する
+            if (macro !== undefined) {
                 const entry: VariableInfo = {
                     name: path,
                     type: formatMacroType(macro),
@@ -2875,15 +2846,7 @@ function buildResult(
         new Set(Array.from(addressGlobals).filter(path => !classified.has(path)));
 
     // マクロはアドレスを渡しても書き込まれないため、出力側には出さない（入力側のみ）
-    const isMacroRoot = (path: string) => {
-        const rootName = getRootName(path);
-        return shouldClassifyAsMacro(
-            rootName,
-            symbols.macros.has(rootName),
-            symbols.vars.has(rootName),
-            classifyAllUppercaseAsMacros
-        );
-    };
+    const isMacroRoot = (path: string) => symbols.macros.has(getRootName(path));
 
     classifyGlobalVars(
         withoutAlreadyClassified(globalVarReads),
@@ -2940,13 +2903,11 @@ function buildResult(
  *
  * @param tree 解析対象のASTツリー
  * @param cursorLine ユーザーがカーソルを置いている行（0始まり）
- * @param classifyAllUppercaseAsMacros 大文字のみの識別子をマクロとして分類するか
  * @returns 解析結果、またはカーソルが関数名部分にない場合は null
  */
 export function analyzeCFunction(
     tree: Parser.Tree,
     cursorLine: number,
-    classifyAllUppercaseAsMacros: boolean = true,
     macroDisplay: MacroDisplay = 'separate'
 ): AnalysisResult | null {
     const rootNode = tree.rootNode;
@@ -2967,7 +2928,7 @@ export function analyzeCFunction(
         symbols.vars
     );
 
-    return buildResult(funcNode, signature, body, symbols, classifyAllUppercaseAsMacros, macroDisplay);
+    return buildResult(funcNode, signature, body, symbols, macroDisplay);
 }
 
 /**
@@ -3149,11 +3110,4 @@ function isAncestor(ancestor: Parser.SyntaxNode, descendant: Parser.SyntaxNode):
         curr = curr.parent;
     }
     return false;
-}
-
-/**
- * 文字列がすべて大文字（英大文字、数字、アンダースコア）で構成されているか判定します。
- */
-function isAllUppercase(str: string): boolean {
-    return /^[A-Z_][A-Z0-9_]*$/.test(str);
 }

@@ -61,7 +61,6 @@ export async function getParser(): Promise<Parser> {
  *
  * @param source 解析対象のCソースコード
  * @param signatureHint 解析対象関数のシグネチャ行を特定するための部分文字列（例: `int process(`）
- * @param classifyAllUppercaseAsMacros 大文字識別子をマクロとして分類するか
  * @param macroDisplay マクロ変数・マクロ関数の表示方法
  * @returns 解析結果、またはカーソル位置が関数シグネチャ行でない場合は null
  * @throws signatureHint に一致する行が存在しない場合
@@ -69,7 +68,6 @@ export async function getParser(): Promise<Parser> {
 export async function analyze(
     source: string,
     signatureHint: string,
-    classifyAllUppercaseAsMacros: boolean = true,
     macroDisplay: MacroDisplay = 'separate'
 ): Promise<AnalysisResult | null> {
     const parser = await getParser();
@@ -81,7 +79,7 @@ export async function analyze(
 
     // 本番（extension.ts）と同じ経路にするため、修飾子マクロの修復を通す
     const tree = parseWithModifierMacroRepair(parser, source);
-    return analyzeCFunction(tree, cursorLine, classifyAllUppercaseAsMacros, macroDisplay);
+    return analyzeCFunction(tree, cursorLine, macroDisplay);
 }
 
 /**
@@ -89,7 +87,6 @@ export async function analyze(
  *
  * @param source 解析対象のCソースコード
  * @param signatureHint 解析対象関数のシグネチャ行を特定するための部分文字列
- * @param classifyAllUppercaseAsMacros 大文字識別子をマクロとして分類するか
  * @param macroDisplay マクロ変数・マクロ関数の表示方法
  * @returns 解析結果（null 以外であることが保証される）
  * @throws 解析結果が null だった場合
@@ -97,10 +94,9 @@ export async function analyze(
 export async function analyzeOrThrow(
     source: string,
     signatureHint: string,
-    classifyAllUppercaseAsMacros: boolean = true,
     macroDisplay: MacroDisplay = 'separate'
 ): Promise<AnalysisResult> {
-    const result = await analyze(source, signatureHint, classifyAllUppercaseAsMacros, macroDisplay);
+    const result = await analyze(source, signatureHint, macroDisplay);
     if (!result) {
         throw new Error(`解析結果が null でした（シグネチャ: "${signatureHint}"）。`);
     }
