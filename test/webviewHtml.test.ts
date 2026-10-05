@@ -788,3 +788,101 @@ describe('renderAnalysisHtml: 定義ジャンプの診断 (v3.2.0)', () => {
         assert.ok(html.includes('<span class="ambiguous-mark" title="原因1-③: 候補が複数&#10;候補が2件あり、先頭（a.h:2）を採用しました">!</span>'));
     });
 });
+
+describe('renderAnalysisHtml: マクロの表示方法 (v3.6.0)', () => {
+    /** マクロ変数・マクロ関数を含む解析結果 */
+    const withMacros = () => makeResult({
+        inputs: [{ name: 'n', type: 'int', details: '' }],
+        outputs: [{ name: 'g_count', type: 'int', details: '' }],
+        calledFunctions: [{ name: 'calc', type: 'int' }],
+        macroVariables: [
+            { name: 'LIMIT', type: 'MACRO', details: '', value: '10', direction: 'input' },
+            { name: 'PORT1', type: 'MACRO', details: '', value: '(*(char *)0x10)', direction: 'output' }
+        ],
+        macroFunctions: [{ name: 'SQ', type: 'MACRO', value: '((x) * (x))' }]
+    });
+
+    /**
+     * 指定したセクションに含まれる項目名を取り出します。
+     *
+     * @param html 生成されたHTML
+     * @param section セクションの種別（input / output / called-fn など）
+     * @returns 項目名の配列
+     */
+    function itemsOf(html: string, section: string): string[] {
+        const start = html.indexOf(`class="section-container ${section}"`);
+        assert.ok(start >= 0, `セクション ${section} が存在すること`);
+        const end = html.indexOf('class="section-container ', start + 1);
+        const block = html.substring(start, end < 0 ? html.length : end);
+        return Array.from(block.matchAll(/data-name="([^"]+)"/g)).map(m => m[1]);
+    }
+
+    test('切り替えUIを出力する (v3.6.0)', () => {
+        const html = renderAnalysisHtml(makeResult(), 'N');
+        assert.ok(html.includes('class="macro-display"'), '切り替えUIが出力されること');
+        assert.ok(html.includes('data-macro-display="separate"'), '「分けて表示」の選択肢があること');
+        assert.ok(html.includes('data-macro-display="merged"'), '「入出力に含める」の選択肢があること');
+        assert.ok(html.includes("command: 'setMacroDisplay'"), '拡張機能へ通知する処理があること');
+    });
+
+    test('既定では separate が選択状態となる (v3.6.0)', () => {
+        const html = renderAnalysisHtml(makeResult(), 'N');
+        assert.ok(html.includes('class="macro-display-option is-active" data-macro-display="separate"'));
+    });
+
+    test('merged を指定すると選択状態が入れ替わる (v3.6.0)', () => {
+        const html = renderAnalysisHtml(makeResult(), 'N', 'name', DEFAULT_COMMENT_WIDTH, 'merged');
+        assert.ok(html.includes('class="macro-display-option is-active" data-macro-display="merged"'));
+    });
+
+    test('separate ではマクロの分類に表示する (v3.6.0)', () => {
+        const html = renderAnalysisHtml(withMacros(), 'N');
+        assert.deepEqual(itemsOf(html, 'input'), ['n']);
+        assert.deepEqual(itemsOf(html, 'output'), ['g_count']);
+        assert.deepEqual(itemsOf(html, 'macro-var'), ['LIMIT', 'PORT1']);
+        assert.deepEqual(itemsOf(html, 'called-fn'), ['calc']);
+        assert.deepEqual(itemsOf(html, 'macro-fn'), ['SQ']);
+    });
+
+    test('merged では入力・出力・呼び出し関数へ振り分ける (v3.6.0)', () => {
+        const html = renderAnalysisHtml(withMacros(), 'N', 'name', DEFAULT_COMMENT_WIDTH, 'merged');
+        assert.deepEqual(itemsOf(html, 'input'), ['n', 'LIMIT'], '読み取りのマクロは入力変数へ');
+        assert.deepEqual(itemsOf(html, 'output'), ['g_count', 'PORT1'], '書き込みのマクロは出力変数へ');
+        assert.deepEqual(itemsOf(html, 'called-fn'), ['calc', 'SQ'], 'マクロ関数は呼び出し関数へ');
+    });
+
+    test('merged ではマクロの分類を表示しない (v3.6.0)', () => {
+        const html = renderAnalysisHtml(withMacros(), 'N', 'name', DEFAULT_COMMENT_WIDTH, 'merged');
+        assert.ok(!html.includes('class="section-container macro-var"'), 'マクロ変数の分類が出ないこと');
+        assert.ok(!html.includes('class="section-container macro-fn"'), 'マクロ関数の分類が出ないこと');
+    });
+
+    test('merged では件数も振り分け後の数になる (v3.6.0)', () => {
+        const html = renderAnalysisHtml(withMacros(), 'N', 'name', DEFAULT_COMMENT_WIDTH, 'merged');
+        const start = html.indexOf('class="section-container input"');
+        assert.ok(html.substring(start, start + 400).includes('>2<'), '入力変数の件数が2になること');
+    });
+
+    test('表示先が未設定のマクロは入力変数へ出す (v3.6.0)', () => {
+        const html = renderAnalysisHtml(makeResult({
+            macroVariables: [{ name: 'UNKNOWN', type: 'MACRO', details: '' }]
+        }), 'N', 'name', DEFAULT_COMMENT_WIDTH, 'merged');
+        assert.deepEqual(itemsOf(html, 'input'), ['UNKNOWN']);
+    });
+
+    test('定義値や定義位置の表示は、どちらの設定でも変わらない (v3.6.0)', () => {
+        const result = makeResult({
+            macroVariables: [{
+                name: 'LIMIT', type: 'MACRO', details: '', value: '10', direction: 'input',
+                definition: { filePath: 'file:///a.h', line: 1, column: 0 }
+            }]
+        });
+        const separate = renderAnalysisHtml(result, 'N');
+        const merged = renderAnalysisHtml(result, 'N', 'name', DEFAULT_COMMENT_WIDTH, 'merged');
+        for (const html of [separate, merged]) {
+            assert.ok(html.includes('data-value="10"'), '定義値が出ること');
+            assert.ok(html.includes('data-def-file="file:///a.h"'), '定義位置が出ること');
+            assert.ok(html.includes('class="var-def-button"'), '「定義へ」ボタンが出ること');
+        }
+    });
+});

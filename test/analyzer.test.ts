@@ -2650,7 +2650,7 @@ ${body}
     });
 });
 
-describe('マクロの表示方法の切り替え (v3.4.0)', () => {
+describe('マクロの表示先の記録 (v3.6.0)', () => {
     /** マクロ・列挙子・マクロ関数を一通り使う検証用のソース */
     const SOURCE = `
 #define LIMIT 10
@@ -2670,56 +2670,42 @@ int work(int n)
 }
 `;
 
-    test('既定（separate）では従来どおりマクロの分類に表示する (v3.4.0)', async () => {
+    test('解析結果では、マクロを常に独立した分類に保持する (v3.6.0)', async () => {
         const r = await analyzeOrThrow(SOURCE, 'int work(');
         assert.deepEqual(names(r.macroVariables ?? []).sort(), ['LIMIT', 'MODE_ON', 'PORT1']);
         assert.deepEqual(names(r.macroFunctions ?? []), ['SQ']);
-        assert.ok(!names(r.inputs).includes('LIMIT'), '入力変数には出ないこと');
         assert.deepEqual(names(r.calledFunctions), ['calc']);
+        assert.ok(!names(r.inputs).includes('LIMIT'), '入力変数には含めないこと');
     });
 
-    test('merged では読み取りのマクロを入力変数に含める (v3.4.0)', async () => {
-        const r = await analyzeOrThrow(SOURCE, 'int work(', 'merged');
-        assert.ok(names(r.inputs).includes('LIMIT'), 'LIMIT が入力変数に出ること');
-        assert.equal(findVar(r.inputs, 'LIMIT')?.type, 'MACRO');
-        assert.equal(findVar(r.inputs, 'LIMIT')?.value, '10', '定義値は保持されること');
+    test('読み取りのマクロには input、書き込みのマクロには output を記録する (v3.6.0)', async () => {
+        const r = await analyzeOrThrow(SOURCE, 'int work(');
+        const macros = r.macroVariables ?? [];
+        assert.equal(findVar(macros, 'LIMIT')?.direction, 'input');
+        assert.equal(findVar(macros, 'MODE_ON')?.direction, 'input');
+        assert.equal(findVar(macros, 'PORT1')?.direction, 'output');
     });
 
-    test('merged では書き込みのマクロを出力変数に含める (v3.4.0)', async () => {
-        const r = await analyzeOrThrow(SOURCE, 'int work(', 'merged');
-        assert.ok(names(r.outputs).includes('PORT1'), 'PORT1 が出力変数に出ること');
-        assert.equal(findVar(r.outputs, 'PORT1')?.type, 'MACRO');
+    test('マクロの型名欄は MACRO、列挙子は enum とする (v3.6.0)', async () => {
+        const r = await analyzeOrThrow(SOURCE, 'int work(');
+        const macros = r.macroVariables ?? [];
+        assert.equal(findVar(macros, 'LIMIT')?.type, 'MACRO');
+        assert.equal(findVar(macros, 'MODE_ON')?.type, 'enum');
+        assert.equal((r.macroFunctions ?? [])[0]?.type, 'MACRO');
     });
 
-    test('merged ではマクロ関数を呼び出し関数に含める (v3.4.0)', async () => {
-        const r = await analyzeOrThrow(SOURCE, 'int work(', 'merged');
-        assert.deepEqual(names(r.calledFunctions).sort(), ['SQ', 'calc']);
-        assert.equal(r.calledFunctions.find(f => f.name === 'SQ')?.type, 'MACRO');
-    });
+    test('アドレス渡しのマクロにも表示先を記録する (v3.6.0)', async () => {
+        const r = await analyzeOrThrow(`
+#define LIMIT 10
+extern void set_value(int *p);
 
-    test('merged ではマクロの分類を空にする (v3.4.0)', async () => {
-        const r = await analyzeOrThrow(SOURCE, 'int work(', 'merged');
-        assert.deepEqual(r.macroVariables ?? [], []);
-        assert.deepEqual(r.macroFunctions ?? [], []);
-    });
-
-    test('merged でも列挙子は enum のまま入力変数に含める (v3.4.0)', async () => {
-        const r = await analyzeOrThrow(SOURCE, 'int work(', 'merged');
-        assert.equal(findVar(r.inputs, 'MODE_ON')?.type, 'enum');
-        assert.equal(findVar(r.inputs, 'MODE_ON')?.value, '1');
-    });
-
-    test('定義が見つからないマクロは、どちらでも (推定) のままとする (v3.4.0)', async () => {
-        const source = `
-int work(int n)
+void work(void)
 {
-    return n + UNKNOWN_LIMIT;
+    set_value(&LIMIT);
 }
-`;
-        // 定義が見つからない名前はマクロとみなさないため、どちらでも入力変数に出る
-        const separate = await analyzeOrThrow(source, 'int work(');
-        assert.equal(findVar(separate.inputs, 'UNKNOWN_LIMIT')?.type, '(推定)');
-        const merged = await analyzeOrThrow(source, 'int work(', 'merged');
-        assert.equal(findVar(merged.inputs, 'UNKNOWN_LIMIT')?.type, '(推定)');
+`, 'void work(');
+        // マクロは書き込まれないため、入力側にのみ出す
+        const macro = findVar(r.macroVariables ?? [], 'LIMIT');
+        assert.equal(macro?.direction, 'input');
     });
 });

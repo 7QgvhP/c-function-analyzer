@@ -12,7 +12,6 @@ import {
     AnalysisResult,
     DefinitionInfo,
     FunctionInfo,
-    MacroDisplay,
     SourcePosition,
     VariableInfo
 } from './analyzer';
@@ -73,14 +72,11 @@ const MACRO_TYPE = 'MACRO';
  * @param result 解析結果（この関数が直接書き換えます）
  * @param lookup 定義位置の解決手段
  * @param signals 原因の判定に使うエディタ側の手がかり（省略時は判定しない）
- * @param macroDisplay マクロ変数の表示方法。`merged` の場合は、マクロだと判明しても
- *                     入力変数・出力変数の一覧に置いたままにします
  */
 export async function resolveDefinitions(
     result: AnalysisResult,
     lookup: DefinitionLookup,
-    signals?: EditorSignals,
-    macroDisplay: MacroDisplay = 'separate'
+    signals?: EditorSignals
 ): Promise<void> {
     const macroVariables = result.macroVariables ?? [];
     const macroFunctions = result.macroFunctions ?? [];
@@ -99,8 +95,13 @@ export async function resolveDefinitions(
 
     for (const list of variableLists) {
         for (const item of list) {
-            const canBecomeMacro = macroDisplay === 'separate' && list !== macroVariables;
-            await applyToVariable(item, lookup, typeNames, movedToMacro, canBecomeMacro, signals);
+            // マクロだと判明した場合に備え、入力・出力のどちらに出ていたかを控える
+            if (list === result.inputs) {
+                item.direction = 'input';
+            } else if (list === result.outputs) {
+                item.direction = 'output';
+            }
+            await applyToVariable(item, lookup, typeNames, movedToMacro, list !== macroVariables, signals);
         }
     }
 

@@ -485,45 +485,45 @@ describe('resolveDefinitions: 定義ジャンプの診断 (v3.2.0)', () => {
     });
 });
 
-describe('resolveDefinitions: マクロの表示方法 (v3.4.0)', () => {
-    test('separate では、マクロだと判明した変数をマクロ変数へ移す (v3.4.0)', async () => {
-        const result = makeResult({
-            inputs: [{ name: 'LIMIT', type: '(推定)', details: '', usage: { line: 1, column: 4 } }]
-        });
-        await resolveDefinitions(result, makeLookup({
-            1: { info: { kind: 'macro', type: '', arrayDimensions: [], value: '100' } }
-        }), undefined, 'separate');
-
-        assert.deepEqual(result.inputs, [], '入力変数からは取り除かれること');
-        assert.equal(result.macroVariables?.[0].name, 'LIMIT');
-        assert.equal(result.macroVariables?.[0].type, 'MACRO');
-    });
-
-    test('merged では、マクロだと判明しても入力変数に置いたままにする (v3.4.0)', async () => {
+describe('resolveDefinitions: マクロだと判明した項目 (v3.6.0)', () => {
+    test('マクロだと判明した変数はマクロ変数へ移し、表示先を保つ (v3.6.0)', async () => {
         const result = makeResult({
             inputs: [{ name: 'LIMIT', type: '(推定)', details: '', usage: { line: 1, column: 4 } }]
         });
         await resolveDefinitions(result, makeLookup({
             1: { info: { kind: 'macro', type: '', arrayDimensions: [], value: '100', comment: '上限値' } }
-        }), undefined, 'merged');
+        }));
 
-        assert.equal(result.inputs.length, 1, '入力変数に残ること');
-        assert.equal(result.inputs[0].type, 'MACRO');
-        assert.equal(result.inputs[0].value, '100');
-        assert.equal(result.inputs[0].comment, '上限値');
-        assert.deepEqual(result.macroVariables, [], 'マクロ変数には移さないこと');
+        assert.deepEqual(result.inputs, [], '入力変数からは取り除かれること');
+        const macro = result.macroVariables?.[0];
+        assert.equal(macro?.name, 'LIMIT');
+        assert.equal(macro?.type, 'MACRO');
+        assert.equal(macro?.value, '100');
+        assert.equal(macro?.comment, '上限値');
+        assert.equal(macro?.direction, 'input', '入力変数にあったことを記録すること');
     });
 
-    test('merged では、列挙子だと判明した場合も入力変数に置いたままにする (v3.4.0)', async () => {
+    test('出力変数にあった項目には output を記録する (v3.6.0)', async () => {
+        const result = makeResult({
+            outputs: [{ name: 'PORT1', type: '(推定)', details: '', usage: { line: 1, column: 4 } }]
+        });
+        await resolveDefinitions(result, makeLookup({
+            1: { info: { kind: 'macro', type: '', arrayDimensions: [], value: '(*(char *)0x10)' } }
+        }));
+
+        assert.deepEqual(result.outputs, []);
+        assert.equal(result.macroVariables?.[0].direction, 'output');
+    });
+
+    test('列挙子だと判明した場合も同様に移す (v3.6.0)', async () => {
         const result = makeResult({
             inputs: [{ name: 'ST_RUN', type: '(推定)', details: '', usage: { line: 1, column: 4 } }]
         });
         await resolveDefinitions(result, makeLookup({
             1: { info: { kind: 'enum', type: '', arrayDimensions: [], value: '1' } }
-        }), undefined, 'merged');
+        }));
 
-        assert.equal(result.inputs.length, 1);
-        assert.equal(result.inputs[0].type, 'enum');
-        assert.equal(result.inputs[0].value, '1');
+        assert.equal(result.macroVariables?.[0].type, 'enum');
+        assert.equal(result.macroVariables?.[0].value, '1');
     });
 });

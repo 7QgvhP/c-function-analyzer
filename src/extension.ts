@@ -5,7 +5,6 @@ import {
     AnalysisResult,
     analyzeCFunction,
     describeDefinitionSite,
-    MacroDisplay,
     SourcePosition
 } from './analyzer';
 import { FunctionAnalyzerWebview } from './webview';
@@ -87,13 +86,9 @@ export async function activate(context: vscode.ExtensionContext) {
             // （GLOBAL BYTE hoge; のような修飾子マクロ付き宣言は必要に応じて修復する）
             const tree = parseWithModifierMacroRepair(parser, document.getText());
 
-            // マクロを独立した分類に出すか、入力変数・出力変数・呼び出し関数に含めるか
-            const config = vscode.workspace.getConfiguration('c-function-analyzer');
-            const macroDisplay: MacroDisplay =
-                config.get<string>('macroDisplay', 'separate') === 'merged' ? 'merged' : 'separate';
-
             // 現在のファイルだけで分かる範囲を解析する
-            const result = analyzeCFunction(tree, cursorLine, macroDisplay);
+            // （マクロをどこに表示するかは設定 macroDisplay に応じて描画時に決まる）
+            const result = analyzeCFunction(tree, cursorLine);
 
             if (!result) {
                 // 関数定義の関数名や引数宣言がある行以外で実行された場合はインフォメーションを表示
@@ -108,7 +103,7 @@ export async function activate(context: vscode.ExtensionContext) {
             const signals = collectEditorSignals(document);
             const lookup = createDefinitionLookup(parser, document);
             try {
-                await resolveDefinitions(result, lookup, signals, macroDisplay);
+                await resolveDefinitions(result, lookup, signals);
             } finally {
                 lookup.dispose();
             }

@@ -73,6 +73,41 @@ export const WEBVIEW_STYLES = `
             gap: 5px;
         }
 
+        /* マクロの表示方法 */
+        .macro-display {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .macro-display-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-right: 3px;
+        }
+
+        .macro-display-option {
+            background: var(--surface);
+            border: 1px solid var(--border-color);
+            color: var(--text-muted);
+            padding: 2px 9px;
+            font-family: inherit;
+            font-size: 11px;
+            border-radius: 3px;
+            cursor: pointer;
+            transition: background 0.12s ease, color 0.12s ease;
+        }
+
+        .macro-display-option:hover {
+            color: var(--vscode-foreground, #cccccc);
+        }
+
+        .macro-display-option.is-active {
+            background: var(--vscode-button-background, #0e639c);
+            color: var(--vscode-button-foreground, #ffffff);
+            border-color: var(--vscode-button-background, #0e639c);
+        }
+
         /* 定義ジャンプの診断結果を開くボタン */
         .diagnosis-button {
             background: var(--surface);

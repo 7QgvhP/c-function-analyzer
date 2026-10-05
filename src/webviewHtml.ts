@@ -4,7 +4,13 @@
  * VS Code API には依存しない純粋な文字列処理のみで構成されており、
  * ヘッドレス環境（Node 単体）でテスト可能な状態を保っています。
  */
-import { AnalysisResult, DefinitionLocation, FunctionInfo, VariableInfo } from './analyzer';
+import {
+    AnalysisResult,
+    DefinitionLocation,
+    FunctionInfo,
+    MacroDisplay,
+    VariableInfo
+} from './analyzer';
 import type { DefinitionDiagnosis } from './definitionDiagnosis';
 import { WEBVIEW_STYLES } from './webviewStyles';
 
@@ -280,6 +286,66 @@ function renderCopyFormatSelector(copyFormat: CopyFormat): string {
         </div>`;
 }
 
+/**
+ * マクロの表示方法に応じて、各分類に表示する項目を組み立てます。
+ *
+ * 解析結果は常にマクロを分けて保持しているため、`merged` の場合のみ
+ * 入力変数・出力変数・呼び出し関数へ移し替えます（解析はやり直しません）。
+ *
+ * @param result 解析結果
+ * @param macroDisplay マクロの表示方法
+ * @returns 分類ごとの表示項目
+ */
+function arrangeSections(result: AnalysisResult, macroDisplay: MacroDisplay): {
+    inputs: VariableInfo[];
+    outputs: VariableInfo[];
+    macroVariables: VariableInfo[];
+    calledFunctions: FunctionInfo[];
+    macroFunctions: FunctionInfo[];
+} {
+    const macroVariables = result.macroVariables ?? [];
+    const macroFunctions = result.macroFunctions ?? [];
+
+    if (macroDisplay !== 'merged') {
+        return {
+            inputs: result.inputs,
+            outputs: result.outputs,
+            macroVariables,
+            calledFunctions: result.calledFunctions,
+            macroFunctions
+        };
+    }
+
+    // 読み書きの状況（direction）に従って入力・出力へ振り分ける。
+    // direction を持たない項目は、値の参照とみなして入力に出す。
+    return {
+        inputs: [...result.inputs, ...macroVariables.filter(item => item.direction !== 'output')],
+        outputs: [...result.outputs, ...macroVariables.filter(item => item.direction === 'output')],
+        macroVariables: [],
+        calledFunctions: [...result.calledFunctions, ...macroFunctions],
+        macroFunctions: []
+    };
+}
+
+/**
+ * マクロの表示方法を切り替えるUIを生成します。
+ *
+ * @param macroDisplay 現在選択されている表示方法
+ * @returns 生成したHTML
+ */
+function renderMacroDisplaySelector(macroDisplay: MacroDisplay): string {
+    const option = (value: MacroDisplay, label: string, title: string) =>
+        `<button class="macro-display-option${macroDisplay === value ? ' is-active' : ''}"`
+        + ` data-macro-display="${value}" title="${title}">${label}</button>`;
+
+    return `
+        <div class="macro-display" role="group" aria-label="マクロの表示">
+            <span class="macro-display-label">マクロ</span>
+            ${option('separate', '分けて表示', 'マクロ変数・マクロ関数を独立した分類に表示します')}
+            ${option('merged', '入出力に含める', 'マクロ変数・マクロ関数を入力変数・出力変数・呼び出し関数に含めて表示します')}
+        </div>`;
+}
+
 /** コメント欄の既定の幅（px） */
 export const DEFAULT_COMMENT_WIDTH = 260;
 
@@ -309,17 +375,19 @@ export function clampCommentWidth(width: number): number {
  * @param nonce Content-Security-Policy で使用する nonce 値
  * @param copyFormat コピー時の出力形式（省略時は変数名のみ）
  * @param commentWidth コメント欄の幅（px。省略時は既定値）
+ * @param macroDisplay マクロ変数・マクロ関数の表示方法
  * @returns 生成したHTML
  */
 export function renderAnalysisHtml(
     result: AnalysisResult,
     nonce: string,
     copyFormat: CopyFormat = 'name',
-    commentWidth: number = DEFAULT_COMMENT_WIDTH
+    commentWidth: number = DEFAULT_COMMENT_WIDTH,
+    macroDisplay: MacroDisplay = 'separate'
 ): string {
     const width = clampCommentWidth(commentWidth);
-    const macroVariables = result.macroVariables ?? [];
-    const macroFunctions = result.macroFunctions ?? [];
+    const sections = arrangeSections(result, macroDisplay);
+    const { macroVariables, macroFunctions } = sections;
 
     // 同名ファイルが複数あった場合は、見落とさないようヘッダにも注意を出す
     const ambiguousNotice = hasAmbiguousDefinition(result)
@@ -352,6 +420,7 @@ ${WEBVIEW_STYLES}
         </h1>
         <div class="header-tools">
 ${renderCopyFormatSelector(copyFormat)}
+${renderMacroDisplaySelector(macroDisplay)}
             <button class="diagnosis-button" title="定義ジャンプの結果と、うまくいかなかった項目の原因を出力パネルに表示します">定義の診断</button>
         </div>
     </div>
@@ -361,10 +430,10 @@ ${ambiguousNotice}
     <div class="comment-resizer" title="ドラッグしてコメント欄の幅を変更（すべての分類に反映されます）"></div>
     <div class="layout-grid">
         <!-- 入力変数セクション -->
-${renderSection('input', '入力変数', result.inputs.length, renderVariableList(result.inputs))}
+${renderSection('input', '入力変数', sections.inputs.length, renderVariableList(sections.inputs))}
 
         <!-- 出力変数セクション -->
-${renderSection('output', '出力変数', result.outputs.length, renderVariableList(result.outputs))}
+${renderSection('output', '出力変数', sections.outputs.length, renderVariableList(sections.outputs))}
 
         <!-- 内部（ローカル）変数セクション -->
 ${renderSection('internal', '内部変数', result.internalVariables.length, renderVariableList(result.internalVariables))}
@@ -373,7 +442,7 @@ ${renderSection('internal', '内部変数', result.internalVariables.length, ren
 ${macroVariables.length > 0 ? renderSection('macro-var', 'マクロ変数', macroVariables.length, renderVariableList(macroVariables)) : ''}
 
         <!-- 呼び出し関数セクション -->
-${renderSection('called-fn', '呼び出し関数', result.calledFunctions.length, renderCalledFunctions(result.calledFunctions))}
+${renderSection('called-fn', '呼び出し関数', sections.calledFunctions.length, renderCalledFunctions(sections.calledFunctions))}
 
         <!-- マクロ関数セクション（該当がある場合のみ表示） -->
 ${macroFunctions.length > 0 ? renderSection('macro-fn', 'マクロ関数', macroFunctions.length, renderCalledFunctions(macroFunctions)) : ''}
@@ -489,6 +558,16 @@ ${macroFunctions.length > 0 ? renderSection('macro-fn', 'マクロ関数', macro
         // 表示幅が変わると許容できる最大幅も変わるため、その都度収め直す
         applyCommentWidth(currentCommentWidth());
         window.addEventListener('resize', () => applyCommentWidth(currentCommentWidth()));
+
+        // マクロの表示方法の切り替え
+        document.querySelectorAll('.macro-display-option').forEach(button => {
+            button.addEventListener('click', () => {
+                const value = button.getAttribute('data-macro-display');
+                if (value && !button.classList.contains('is-active')) {
+                    vscode.postMessage({ command: 'setMacroDisplay', macroDisplay: value });
+                }
+            });
+        });
 
         // 定義ジャンプの診断結果（出力パネル）を開く
         document.querySelectorAll('.diagnosis-button').forEach(button => {

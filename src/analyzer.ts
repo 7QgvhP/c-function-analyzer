@@ -67,6 +67,13 @@ export interface VariableInfo {
     segments?: SourcePosition[];
     /** 定義ジャンプの結果と原因の判定（定義を探さなかった項目では未設定） */
     diagnosis?: DefinitionDiagnosis;
+    /**
+     * マクロ変数を入力変数・出力変数へ含めて表示する場合の、表示先。
+     *
+     * 設定 `macroDisplay` が `merged` のときに、描画側がこの値を見て振り分けます。
+     * マクロ変数以外の項目では未設定です。
+     */
+    direction?: 'input' | 'output';
 }
 
 /** インクルードファイルの解決結果 */
@@ -1807,6 +1814,9 @@ function formatMacroType(macro?: MacroDefinition): string {
  *
  * - `separate`: 「マクロ変数」「マクロ関数」として独立した分類に表示します
  * - `merged`: 入力変数・出力変数・呼び出し関数に含めて表示します
+ *
+ * 解析結果は常にマクロを分けて保持し、どちらに表示するかは描画時に決めます。
+ * 解析をやり直さずに切り替えられるようにするためです。
  */
 export type MacroDisplay = 'separate' | 'merged';
 
@@ -2593,15 +2603,13 @@ function analyzeBody(
  * @param signature フェーズ3のシグネチャ解析結果
  * @param body フェーズ4のボディ解析結果
  * @param symbols フェーズ1で収集したファイルスコープのシンボル情報
- * @param macroDisplay マクロ変数・マクロ関数の表示方法
  * @returns 最終的な解析結果
  */
 function buildResult(
     funcNode: Parser.SyntaxNode,
     signature: SignatureInfo,
     body: BodyAnalysis,
-    symbols: FileScopeSymbols,
-    macroDisplay: MacroDisplay = 'separate'
+    symbols: FileScopeSymbols
 ): AnalysisResult {
     const { functionName, returnType, params } = signature;
     const {
@@ -2647,8 +2655,7 @@ function buildResult(
             if (macro && macro.value) {
                 info.value = macro.value;
             }
-            // 設定により、マクロ関数を呼び出し関数の一覧に含める
-            (macroDisplay === 'merged' ? normalCalledFunctions : macroFunctions).push(info);
+            macroFunctions.push(info);
         } else {
             // 宣言が見つかれば戻り値の型（void も明示）、見つからなければ推定表示
             info.type = declared ? declared.returnType : UNKNOWN_TYPE;
@@ -2805,8 +2812,9 @@ function buildResult(
                         entry.comment = macro.comment;
                     }
                 }
-                // 設定により、マクロ変数を入力変数・出力変数の一覧に含める
-                (macroDisplay === 'merged' ? target : macroVariables).push(entry);
+                // 入力変数・出力変数へ含めて表示する場合に備え、どちらへ出すかを控える
+                entry.direction = target === inputs ? 'input' : 'output';
+                macroVariables.push(entry);
             } else {
                 if (declared) {
                     // 構造体メンバのアクセスを辿って型を解決し、
@@ -2907,8 +2915,7 @@ function buildResult(
  */
 export function analyzeCFunction(
     tree: Parser.Tree,
-    cursorLine: number,
-    macroDisplay: MacroDisplay = 'separate'
+    cursorLine: number
 ): AnalysisResult | null {
     const rootNode = tree.rootNode;
 
@@ -2928,7 +2935,7 @@ export function analyzeCFunction(
         symbols.vars
     );
 
-    return buildResult(funcNode, signature, body, symbols, macroDisplay);
+    return buildResult(funcNode, signature, body, symbols);
 }
 
 /**

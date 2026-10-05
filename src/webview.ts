@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { AnalysisResult } from './analyzer';
+import { AnalysisResult, MacroDisplay } from './analyzer';
 import { buildHighlightRegex } from './highlight';
 import {
     clampCommentWidth,
@@ -20,6 +20,13 @@ export class FunctionAnalyzerWebview {
 
     /** コメント欄の幅（px）。区切り線のドラッグで変更される */
     private _commentWidth: number = DEFAULT_COMMENT_WIDTH;
+
+    /**
+     * マクロの表示方法。設定 `macroDisplay` の値を保持します。
+     *
+     * パネル上で切り替えると、ユーザー設定へ保存したうえで再描画します。
+     */
+    private _macroDisplay: MacroDisplay = 'separate';
 
     /**
      * Webview を表示するか、既存のパネルを更新します。
@@ -80,6 +87,12 @@ export class FunctionAnalyzerWebview {
                         // 定義ジャンプの診断結果（出力パネル）を開く
                         vscode.commands.executeCommand('c-function-analyzer.showDefinitionDiagnostics');
                         break;
+                    case 'setMacroDisplay':
+                        // パネルでの選択をユーザー設定へ保存し、解析し直さずに描画だけ更新する
+                        if (message.macroDisplay === 'separate' || message.macroDisplay === 'merged') {
+                            this._setMacroDisplay(message.macroDisplay);
+                        }
+                        break;
                     case 'setCopyFormat':
                         // 再描画時にも選択を保つため、拡張機能側で保持する
                         if (message.format === 'name' || message.format === 'typeAndName') {
@@ -91,6 +104,18 @@ export class FunctionAnalyzerWebview {
             undefined,
             this._disposables
         );
+
+        // 設定画面など、パネル以外で設定が変更された場合も表示を合わせる
+        vscode.workspace.onDidChangeConfiguration(e => {
+            if (!e.affectsConfiguration('c-function-analyzer.macroDisplay')) {
+                return;
+            }
+            const macroDisplay = readMacroDisplay();
+            if (macroDisplay !== this._macroDisplay) {
+                this._macroDisplay = macroDisplay;
+                this._render();
+            }
+        }, null, this._disposables);
 
         // カーソル移動や選択変更があった場合にデコレーションをクリア
         vscode.window.onDidChangeTextEditorSelection(e => {
@@ -113,13 +138,48 @@ export class FunctionAnalyzerWebview {
      */
     public update(result: AnalysisResult) {
         this._result = result;
+        this._macroDisplay = readMacroDisplay();
         this._panel.title = `Analysis: ${result.functionName}`;
         // Content-Security-Policy 用の nonce は描画のたびに新しく生成する
         this._panel.webview.html = renderAnalysisHtml(
             result,
             createNonce(),
             this._copyFormat,
-            this._commentWidth
+            this._commentWidth,
+            this._macroDisplay
+        );
+    }
+
+    /**
+     * マクロの表示方法を切り替えて、ユーザー設定へ保存します。
+     *
+     * 解析結果は常にマクロを分けて保持しているため、解析をやり直さずに描画だけを
+     * 更新できます。
+     *
+     * @param macroDisplay 新しい表示方法
+     */
+    private async _setMacroDisplay(macroDisplay: MacroDisplay) {
+        this._macroDisplay = macroDisplay;
+        this._render();
+        try {
+            await vscode.workspace
+                .getConfiguration('c-function-analyzer')
+                .update('macroDisplay', macroDisplay, vscode.ConfigurationTarget.Global);
+        } catch (err) {
+            vscode.window.showWarningMessage('マクロの表示方法を設定に保存できませんでした: ' + err);
+        }
+    }
+
+    /**
+     * 現在の状態で Webview を描き直します（解析はやり直しません）。
+     */
+    private _render() {
+        this._panel.webview.html = renderAnalysisHtml(
+            this._result,
+            createNonce(),
+            this._copyFormat,
+            this._commentWidth,
+            this._macroDisplay
         );
     }
 
@@ -230,4 +290,16 @@ export class FunctionAnalyzerWebview {
             editor.revealRange(ranges[0], vscode.TextEditorRevealType.InCenterIfOutsideViewport);
         }
     }
+}
+
+/**
+ * 設定からマクロの表示方法を読み取ります。
+ *
+ * @returns マクロの表示方法（未設定・想定外の値の場合は `separate`）
+ */
+function readMacroDisplay(): MacroDisplay {
+    const value = vscode.workspace
+        .getConfiguration('c-function-analyzer')
+        .get<string>('macroDisplay', 'separate');
+    return value === 'merged' ? 'merged' : 'separate';
 }
