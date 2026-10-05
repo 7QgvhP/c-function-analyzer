@@ -147,7 +147,30 @@ const char        *c_fn(void);   /* 型名欄は char* */
 static const char *sc_fn(void);  /* 型名欄は char* */
 ```
 
-マクロ関数は型名欄が `macro` となり、定義値欄に展開内容が表示されます。
+マクロ関数は型名欄が `MACRO` となり、定義値欄に展開内容が表示されます。
+
+### マクロの表示場所の切り替え
+
+既定では、マクロ変数・マクロ関数は「マクロ変数」「マクロ関数」という独立した分類に表示されます。設定 `c-function-analyzer.macroDisplay` を `merged` にすると、**入力変数・出力変数・呼び出し関数に含めて**表示できます。
+
+| 設定値 | 表示 |
+|---|---|
+| `separate`（既定） | 「マクロ変数」「マクロ関数」の分類に表示します |
+| `merged` | 読み取りのマクロは**入力変数**、書き込みのマクロは**出力変数**、マクロ関数は**呼び出し関数**に表示します |
+
+`merged` の場合、型名欄には **`MACRO`** と表示され、実際の型（`int` など）と区別できます。`enum` の列挙子は `enum` のままです。
+
+```c
+#define LIMIT 10
+#define PORT1 (*(volatile char *)0x1234)
+#define SQ(x) ((x) * (x))
+
+g_count = LIMIT;   /* LIMIT は入力変数（型名欄は MACRO） */
+PORT1 = 1;         /* PORT1 は出力変数（型名欄は MACRO） */
+n = SQ(n);         /* SQ は呼び出し関数（型名欄は MACRO） */
+```
+
+定義値・コメント・定義位置の表示と「定義へ」ボタンの動作は、どちらの設定でも変わりません。
 
 ### マクロ変数の表示
 
@@ -155,9 +178,9 @@ static const char *sc_fn(void);  /* 型名欄は char* */
 
 | 型名 | 定義名 | 定義値 |
 |---|---|---|
-| `macro` | `SYSTEM_TICK_MS` | `10` |
-| `macro` | `BUFFER_ADDR` | `(BASE_ADDRESS + REGISTER_OFFSET)` |
-| `macro` | `ENABLED` | （値を持たないマクロは空欄） |
+| `MACRO` | `SYSTEM_TICK_MS` | `10` |
+| `MACRO` | `BUFFER_ADDR` | `(BASE_ADDRESS + REGISTER_OFFSET)` |
+| `MACRO` | `ENABLED` | （値を持たないマクロは空欄） |
 | `enum` | `STATE_RUN` | `1` |
 | `(推定)` | `UNKNOWN_LIMIT` | （定義が見つからない場合は空欄） |
 
@@ -323,8 +346,8 @@ GLOBAL S16   hal_read(void);  /* 呼び出し関数の戻り値型は S16 */
 | コピー対象 | コピーされる内容 |
 |---|---|
 | コメントを持つ項目がある | `U8` + タブ + `channel` + タブ + `チャンネル番号` |
-| 定義値を持つ項目がある | `macro` + タブ + `MAX_LIMIT` + タブ + `100` |
-| 両方ある | `macro` + タブ + `MAX_LIMIT` + タブ + `100` + タブ + `上限値` |
+| 定義値を持つ項目がある | `MACRO` + タブ + `MAX_LIMIT` + タブ + `100` |
+| 両方ある | `MACRO` + タブ + `MAX_LIMIT` + タブ + `100` + タブ + `上限値` |
 | どちらもない | `int` + タブ + `count` |
 
 
@@ -409,6 +432,7 @@ void INIT_ALL(void);         /* 大文字でも関数として扱われる */
 | 設定項目 | 既定値 | 説明 |
 |---|---|---|
 | `c-function-analyzer.classifyAllUppercaseAsMacros` | `true` | **定義が特定できなかった**シンボルについて、大文字のみの名前をマクロとみなします。定義が見つかったシンボルは名前によらず定義に基づいて分類されるため、本設定の影響を受けません |
+| `c-function-analyzer.macroDisplay` | `separate` | マクロ変数・マクロ関数を独立した分類に表示するか（`separate`）、入力変数・出力変数・呼び出し関数に含めるか（`merged`） |
 | `c-function-analyzer.excludePaths` | `[]` | 定義へのジャンプ先から除外する場所（配下すべてが対象外）。ディレクトリ指定とフォルダ名指定の2通り |
 
 ### 同名ファイルが複数ある場合

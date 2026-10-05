@@ -12,6 +12,7 @@ import {
     AnalysisResult,
     DefinitionInfo,
     FunctionInfo,
+    MacroDisplay,
     SourcePosition,
     VariableInfo
 } from './analyzer';
@@ -57,6 +58,9 @@ interface Resolution {
 /** 型名を特定できなかった項目に表示する文字列（analyzer.ts と揃える） */
 const UNKNOWN_TYPE = '(推定)';
 
+/** マクロの項目の型名欄に表示する文字列（analyzer.ts と揃える） */
+const MACRO_TYPE = 'MACRO';
+
 /**
  * 解析結果の各項目について、定義位置を解決して情報を埋めます。
  *
@@ -69,11 +73,14 @@ const UNKNOWN_TYPE = '(推定)';
  * @param result 解析結果（この関数が直接書き換えます）
  * @param lookup 定義位置の解決手段
  * @param signals 原因の判定に使うエディタ側の手がかり（省略時は判定しない）
+ * @param macroDisplay マクロ変数の表示方法。`merged` の場合は、マクロだと判明しても
+ *                     入力変数・出力変数の一覧に置いたままにします
  */
 export async function resolveDefinitions(
     result: AnalysisResult,
     lookup: DefinitionLookup,
-    signals?: EditorSignals
+    signals?: EditorSignals,
+    macroDisplay: MacroDisplay = 'separate'
 ): Promise<void> {
     const macroVariables = result.macroVariables ?? [];
     const macroFunctions = result.macroFunctions ?? [];
@@ -92,7 +99,8 @@ export async function resolveDefinitions(
 
     for (const list of variableLists) {
         for (const item of list) {
-            await applyToVariable(item, lookup, typeNames, movedToMacro, list !== macroVariables, signals);
+            const canBecomeMacro = macroDisplay === 'separate' && list !== macroVariables;
+            await applyToVariable(item, lookup, typeNames, movedToMacro, canBecomeMacro, signals);
         }
     }
 
@@ -147,7 +155,7 @@ async function applyToVariable(
     }
 
     if (info.kind === 'macro' || info.kind === 'enum') {
-        item.type = info.kind === 'enum' ? 'enum' : 'macro';
+        item.type = info.kind === 'enum' ? 'enum' : MACRO_TYPE;
         if (info.value) {
             item.value = info.value;
         }
@@ -293,7 +301,7 @@ async function applyToFunction(
     }
 
     if (info.kind === 'macro' || info.kind === 'enum') {
-        item.type = info.kind === 'enum' ? 'enum' : 'macro';
+        item.type = info.kind === 'enum' ? 'enum' : MACRO_TYPE;
         if (info.value) {
             item.value = info.value;
         }

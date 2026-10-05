@@ -1,7 +1,13 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import Parser = require('web-tree-sitter');
-import { AnalysisResult, analyzeCFunction, describeDefinitionSite, SourcePosition } from './analyzer';
+import {
+    AnalysisResult,
+    analyzeCFunction,
+    describeDefinitionSite,
+    MacroDisplay,
+    SourcePosition
+} from './analyzer';
 import { FunctionAnalyzerWebview } from './webview';
 import { parseWithModifierMacroRepair } from './macroRepair';
 import { createExcludeFilter } from './excludePaths';
@@ -84,9 +90,12 @@ export async function activate(context: vscode.ExtensionContext) {
             // VS Codeの設定からマクロ分類オプションを取得
             const config = vscode.workspace.getConfiguration('c-function-analyzer');
             const classifyAllUppercaseAsMacros = config.get<boolean>('classifyAllUppercaseAsMacros', true);
+            // マクロを独立した分類に出すか、入力変数・出力変数・呼び出し関数に含めるか
+            const macroDisplay: MacroDisplay =
+                config.get<string>('macroDisplay', 'separate') === 'merged' ? 'merged' : 'separate';
 
             // 現在のファイルだけで分かる範囲を解析する
-            const result = analyzeCFunction(tree, cursorLine, classifyAllUppercaseAsMacros);
+            const result = analyzeCFunction(tree, cursorLine, classifyAllUppercaseAsMacros, macroDisplay);
 
             if (!result) {
                 // 関数定義の関数名や引数宣言がある行以外で実行された場合はインフォメーションを表示
@@ -101,7 +110,7 @@ export async function activate(context: vscode.ExtensionContext) {
             const signals = collectEditorSignals(document);
             const lookup = createDefinitionLookup(parser, document);
             try {
-                await resolveDefinitions(result, lookup, signals);
+                await resolveDefinitions(result, lookup, signals, macroDisplay);
             } finally {
                 lookup.dispose();
             }

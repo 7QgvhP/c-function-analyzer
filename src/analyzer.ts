@@ -249,6 +249,13 @@ export const MAX_INCLUDE_DEPTH = 8;
  */
 const UNKNOWN_TYPE = '(推定)';
 
+/**
+ * マクロの項目の型名欄に表示する文字列。
+ *
+ * 実際の型ではないため、`int` などの型名と区別できるよう大文字にしています。
+ */
+const MACRO_TYPE = 'MACRO';
+
 /** フェーズ3: 関数シグネチャの解析結果 */
 interface SignatureInfo {
     functionName: string;
@@ -1816,9 +1823,21 @@ function collectTypeNames(symbols: FileScopeSymbols): Set<string> {
  * @returns 型名欄の表示文字列
  */
 function formatMacroType(macro?: MacroDefinition): string {
-    // 定義が見つからない場合のみ、推定であることを示す
-    return macro ? macro.kind : UNKNOWN_TYPE;
+    if (!macro) {
+        // 定義が見つからない場合のみ、推定であることを示す
+        return UNKNOWN_TYPE;
+    }
+    // マクロは実際の型ではないため、型名と区別できるよう大文字で表示する
+    return macro.kind === 'macro' ? MACRO_TYPE : macro.kind;
 }
+
+/**
+ * マクロ変数・マクロ関数の表示方法です。
+ *
+ * - `separate`: 「マクロ変数」「マクロ関数」として独立した分類に表示します
+ * - `merged`: 入力変数・出力変数・呼び出し関数に含めて表示します
+ */
+export type MacroDisplay = 'separate' | 'merged';
 
 /** 定義位置にある宣言の種別 */
 export type DefinitionKind = 'macro' | 'enum' | 'function' | 'variable' | 'type' | 'unknown';
@@ -2604,6 +2623,7 @@ function analyzeBody(
  * @param body フェーズ4のボディ解析結果
  * @param symbols フェーズ1で収集したファイルスコープのシンボル情報
  * @param classifyAllUppercaseAsMacros 大文字のみの識別子をマクロとして分類するか
+ * @param macroDisplay マクロ変数・マクロ関数の表示方法
  * @returns 最終的な解析結果
  */
 function buildResult(
@@ -2611,7 +2631,8 @@ function buildResult(
     signature: SignatureInfo,
     body: BodyAnalysis,
     symbols: FileScopeSymbols,
-    classifyAllUppercaseAsMacros: boolean
+    classifyAllUppercaseAsMacros: boolean,
+    macroDisplay: MacroDisplay = 'separate'
 ): AnalysisResult {
     const { functionName, returnType, params } = signature;
     const {
@@ -2656,7 +2677,8 @@ function buildResult(
             if (macro && macro.value) {
                 info.value = macro.value;
             }
-            macroFunctions.push(info);
+            // 設定により、マクロ関数を呼び出し関数の一覧に含める
+            (macroDisplay === 'merged' ? normalCalledFunctions : macroFunctions).push(info);
         } else {
             // 宣言が見つかれば戻り値の型（void も明示）、見つからなければ推定表示
             info.type = declared ? declared.returnType : UNKNOWN_TYPE;
@@ -2812,7 +2834,8 @@ function buildResult(
                         entry.comment = macro.comment;
                     }
                 }
-                macroVariables.push(entry);
+                // 設定により、マクロ変数を入力変数・出力変数の一覧に含める
+                (macroDisplay === 'merged' ? target : macroVariables).push(entry);
             } else {
                 if (declared) {
                     // 構造体メンバのアクセスを辿って型を解決し、
@@ -2923,7 +2946,8 @@ function buildResult(
 export function analyzeCFunction(
     tree: Parser.Tree,
     cursorLine: number,
-    classifyAllUppercaseAsMacros: boolean = true
+    classifyAllUppercaseAsMacros: boolean = true,
+    macroDisplay: MacroDisplay = 'separate'
 ): AnalysisResult | null {
     const rootNode = tree.rootNode;
 
@@ -2943,7 +2967,7 @@ export function analyzeCFunction(
         symbols.vars
     );
 
-    return buildResult(funcNode, signature, body, symbols, classifyAllUppercaseAsMacros);
+    return buildResult(funcNode, signature, body, symbols, classifyAllUppercaseAsMacros, macroDisplay);
 }
 
 /**

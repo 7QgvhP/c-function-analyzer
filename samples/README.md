@@ -65,12 +65,12 @@ sensor_main.c
 
 | 型 | 名前 | 定義値 | 定義元 |
 |---|---|---|---|
-| `macro` | `SYSTEM_TICK_MS` | `10` | **階層3** |
-| `macro` | `MAX_SENSOR_COUNT` | `8` | **階層3** |
-| `macro` | `SENSOR_ERROR_LIMIT` | `3` | **階層2** |
-| `macro` | `WARN_THRESHOLD` | `1000` | **階層1** |
-| `macro` | `ALERT_THRESHOLD` | `2000` | **階層1** |
-| `macro` | `LOCAL_RETRY_MAX` | `5` | 自ファイル |
+| `MACRO` | `SYSTEM_TICK_MS` | `10` | **階層3** |
+| `MACRO` | `MAX_SENSOR_COUNT` | `8` | **階層3** |
+| `MACRO` | `SENSOR_ERROR_LIMIT` | `3` | **階層2** |
+| `MACRO` | `WARN_THRESHOLD` | `1000` | **階層1** |
+| `MACRO` | `ALERT_THRESHOLD` | `2000` | **階層1** |
+| `MACRO` | `LOCAL_RETRY_MAX` | `5` | 自ファイル |
 | `enum` | `SENSOR_STATE_BUSY` | `1` | **階層2**（値が省略された列挙子） |
 | `enum` | `SENSOR_STATE_FATAL` | `17` | **階層2**（`0x10` の次。10進で表示） |
 

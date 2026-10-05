@@ -222,7 +222,7 @@ describe('resolveDefinitions: マクロと列挙子', () => {
 
         assert.deepEqual(result.inputs, [], '入力変数からは取り除かれること');
         assert.equal(result.macroVariables?.length, 1);
-        assert.equal(result.macroVariables?.[0].type, 'macro');
+        assert.equal(result.macroVariables?.[0].type, 'MACRO');
         assert.equal(result.macroVariables?.[0].value, '100');
         assert.equal(result.macroVariables?.[0].comment, '上限値');
     });
@@ -282,7 +282,7 @@ describe('resolveDefinitions: 呼び出し関数', () => {
         assert.equal(result.calledFunctions[0].definition?.line, 10);
     });
 
-    test('マクロ関数だと判明した場合は macro と定義値を出す', async () => {
+    test('マクロ関数だと判明した場合は MACRO と定義値を出す', async () => {
         const result = makeResult({
             macroFunctions: [{ name: 'SQ', usage: { line: 1, column: 4 } }]
         });
@@ -290,7 +290,7 @@ describe('resolveDefinitions: 呼び出し関数', () => {
             1: { info: { kind: 'macro', type: '', arrayDimensions: [], value: '((x)*(x))' } }
         }));
 
-        assert.equal(result.macroFunctions?.[0].type, 'macro');
+        assert.equal(result.macroFunctions?.[0].type, 'MACRO');
         assert.equal(result.macroFunctions?.[0].value, '((x)*(x))');
     });
 
@@ -482,5 +482,48 @@ describe('resolveDefinitions: 定義ジャンプの診断 (v3.2.0)', () => {
         });
         await resolveDefinitions(result, makeLookup({}), NO_SIGNALS);
         assert.equal(result.outputs[0].diagnosis, undefined);
+    });
+});
+
+describe('resolveDefinitions: マクロの表示方法 (v3.4.0)', () => {
+    test('separate では、マクロだと判明した変数をマクロ変数へ移す (v3.4.0)', async () => {
+        const result = makeResult({
+            inputs: [{ name: 'LIMIT', type: '(推定)', details: '', usage: { line: 1, column: 4 } }]
+        });
+        await resolveDefinitions(result, makeLookup({
+            1: { info: { kind: 'macro', type: '', arrayDimensions: [], value: '100' } }
+        }), undefined, 'separate');
+
+        assert.deepEqual(result.inputs, [], '入力変数からは取り除かれること');
+        assert.equal(result.macroVariables?.[0].name, 'LIMIT');
+        assert.equal(result.macroVariables?.[0].type, 'MACRO');
+    });
+
+    test('merged では、マクロだと判明しても入力変数に置いたままにする (v3.4.0)', async () => {
+        const result = makeResult({
+            inputs: [{ name: 'LIMIT', type: '(推定)', details: '', usage: { line: 1, column: 4 } }]
+        });
+        await resolveDefinitions(result, makeLookup({
+            1: { info: { kind: 'macro', type: '', arrayDimensions: [], value: '100', comment: '上限値' } }
+        }), undefined, 'merged');
+
+        assert.equal(result.inputs.length, 1, '入力変数に残ること');
+        assert.equal(result.inputs[0].type, 'MACRO');
+        assert.equal(result.inputs[0].value, '100');
+        assert.equal(result.inputs[0].comment, '上限値');
+        assert.deepEqual(result.macroVariables, [], 'マクロ変数には移さないこと');
+    });
+
+    test('merged では、列挙子だと判明した場合も入力変数に置いたままにする (v3.4.0)', async () => {
+        const result = makeResult({
+            inputs: [{ name: 'ST_RUN', type: '(推定)', details: '', usage: { line: 1, column: 4 } }]
+        });
+        await resolveDefinitions(result, makeLookup({
+            1: { info: { kind: 'enum', type: '', arrayDimensions: [], value: '1' } }
+        }), undefined, 'merged');
+
+        assert.equal(result.inputs.length, 1);
+        assert.equal(result.inputs[0].type, 'enum');
+        assert.equal(result.inputs[0].value, '1');
     });
 });

@@ -209,11 +209,11 @@ describe('renderAnalysisHtml: データ属性', () => {
         assert.ok(html.includes('data-name="printf" data-type=""'), '空の型名が出力されること');
     });
 
-    test('マクロ関数は型名欄に macro と定義値を出力する', () => {
+    test('マクロ関数は型名欄に MACRO と定義値を出力する', () => {
         const html = renderAnalysisHtml(makeResult({
-            macroFunctions: [{ name: 'LOG_MSG', type: 'macro', value: 'printf(m)' }]
+            macroFunctions: [{ name: 'LOG_MSG', type: 'MACRO', value: 'printf(m)' }]
         }), 'N');
-        assert.ok(html.includes('data-type="macro"'), '型名欄が macro となること');
+        assert.ok(html.includes('data-type="MACRO"'), '型名欄が MACRO となること');
         assert.ok(html.includes('>printf(m)</span>'), '定義値が表示されること');
     });
 
@@ -235,7 +235,7 @@ describe('renderAnalysisHtml: データ属性', () => {
 describe('renderAnalysisHtml: 定義値の欄', () => {
     test('定義値を持つ項目に定義値欄を出力する', () => {
         const html = renderAnalysisHtml(makeResult({
-            macroVariables: [{ name: 'MAX_LIMIT', type: 'macro', details: '', value: '100' }]
+            macroVariables: [{ name: 'MAX_LIMIT', type: 'MACRO', details: '', value: '100' }]
         }), 'N');
         assert.ok(html.includes('class="variable-value"'), '定義値欄が出力されること');
         assert.ok(html.includes('>100</span>'), '定義値が表示されること');
@@ -254,14 +254,14 @@ describe('renderAnalysisHtml: 定義値の欄', () => {
         // 表示は省略されるため、ホバーで全文が読めるようにしている
         const longValue = '(BASE_ADDRESS + REGISTER_OFFSET + EXTRA_PADDING)';
         const html = renderAnalysisHtml(makeResult({
-            macroVariables: [{ name: 'ADDR', type: 'macro', details: '', value: longValue }]
+            macroVariables: [{ name: 'ADDR', type: 'MACRO', details: '', value: longValue }]
         }), 'N');
         assert.ok(html.includes(`title="${longValue}"`), 'title に全文が入ること');
     });
 
     test('定義値をHTMLエスケープする', () => {
         const html = renderAnalysisHtml(makeResult({
-            macroVariables: [{ name: 'X', type: 'macro', details: '', value: '"<script>alert(1)</script>"' }]
+            macroVariables: [{ name: 'X', type: 'MACRO', details: '', value: '"<script>alert(1)</script>"' }]
         }), 'N');
         assert.ok(!html.includes('<script>alert(1)</script>'), '生のスクリプトタグが混入しないこと');
         assert.ok(html.includes('&lt;script&gt;'), 'エスケープされること');
@@ -270,8 +270,8 @@ describe('renderAnalysisHtml: 定義値の欄', () => {
     test('定義値を持つ項目のコピーは3列になる', () => {
         const build = extractBuildCopyText(renderAnalysisHtml(makeResult(), 'N', 'typeAndName'), 'typeAndName');
         assert.equal(
-            build([fakeItem('macro', 'MAX_LIMIT', '100')]),
-            'macro\tMAX_LIMIT\t100',
+            build([fakeItem('MACRO', 'MAX_LIMIT', '100')]),
+            'MACRO\tMAX_LIMIT\t100',
             '型名・名前・定義値の3列になること'
         );
     });
@@ -283,7 +283,7 @@ describe('renderAnalysisHtml: 定義値の欄', () => {
 
     test('形式が「変数名」のときは定義値を含めない', () => {
         const build = extractBuildCopyText(renderAnalysisHtml(makeResult(), 'N', 'name'), 'name');
-        assert.equal(build([fakeItem('macro', 'MAX_LIMIT', '100')]), 'MAX_LIMIT');
+        assert.equal(build([fakeItem('MACRO', 'MAX_LIMIT', '100')]), 'MAX_LIMIT');
     });
 });
 
