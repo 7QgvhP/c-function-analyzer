@@ -1,0 +1,77 @@
+# タグから GitHub のリリースを作成し、vsix を添付します。
+#
+# - `v` で始まるタグを push すると自動で実行されます
+# - 過去のタグをリリースしたい場合は、GitHub の Actions 画面から
+#   「Run workflow」でタグを指定して手動実行できます
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'リリースするタグ（例: v3.6.0）'
+        required: true
+
+# リリースの作成に必要な権限のみを与える
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 対象のタグを決める
+        id: target
+        run: echo "tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: ソースを取得する
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.target.outputs.tag }}
+
+      - name: Node を用意する
+        uses: actions/setup-node@v4
+        with:
+          # node --test のグロブ指定を使うため、v22 以降が必要
+          node-version: '24'
+          cache: npm
+
+      - name: 依存関係をインストールする
+        run: npm ci
+
+      - name: タグと package.json のバージョンが一致することを確認する
+        id: version
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "v${version}" != "${{ steps.target.outputs.tag }}" ]; then
+            echo "タグ ${{ steps.target.outputs.tag }} と package.json のバージョン ${version} が一致しません。" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: テストを実行する
+        run: npm test
+
+      - name: vsix を作成する
+        run: npx --yes @vscode/vsce package
+
+      - name: リリースを作成して vsix を添付する
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.target.outputs.tag }}
+        run: |
+          vsix="c-function-analyzer-${{ steps.version.outputs.version }}.vsix"
+          if [ ! -f "$vsix" ]; then
+            echo "vsix が見つかりません: $vsix" >&2
+            exit 1
+          fi
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            # 既にリリースがある場合は、vsix の差し替えのみ行う（説明文は変更しない）
+            gh release upload "$TAG" "$vsix" --clobber
+          else
+            # 説明文は空にする（従来のリリースと同じ体裁）
+            gh release create "$TAG" "$vsix" --title "$TAG" --notes ""
+          fi

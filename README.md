@@ -512,3 +512,14 @@ npm run typecheck  # 型チェックのみ
 テストは Node 標準の `node:test` で実装しており、追加パッケージは不要です。解析ロジックは VS Code API に依存しない構成のため、拡張機能を起動せずヘッドレスで検証できます。
 
 解析ロジックの詳細な仕様は [docs/analysis_spec.md](docs/analysis_spec.md) を参照してください。
+
+### リリース
+
+`v` で始まるタグを push すると、GitHub Actions が自動で次を行います。
+
+1. テストを実行（失敗した場合はリリースしません）
+2. タグと `package.json` のバージョンが一致することを確認
+3. vsix を作成
+4. GitHub のリリースを作成し、vsix を添付（説明文は空。変更内容は [CHANGELOG.md](CHANGELOG.md) を参照してください）
+
+過去のタグをリリースする場合は、GitHub の **Actions → release → Run workflow** でタグを指定して手動実行します。既にリリースがある場合は、vsix の差し替えのみ行います。

@@ -1,5 +1,6 @@
 .vscode/**
 .claude/**
+.github/**
 .gitignore
 src/**
 tsconfig.json
