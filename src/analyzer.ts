@@ -2137,7 +2137,7 @@ function describeEnumeratorValue(enumeratorNode: Parser.SyntaxNode): string | un
  * @param cursorLine カーソル行（0始まり）
  * @returns 対象の function_definition ノード、該当しない場合は null
  */
-function findFunctionAtCursor(rootNode: Parser.SyntaxNode, cursorLine: number): Parser.SyntaxNode | null {
+export function findFunctionAtCursor(rootNode: Parser.SyntaxNode, cursorLine: number): Parser.SyntaxNode | null {
     // カーソル行の先頭位置にあるノードを起点とする
     const nodeAtCursor = rootNode.descendantForPosition({ row: cursorLine, column: 0 });
 

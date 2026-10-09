@@ -9,6 +9,8 @@ import {
 } from './analyzer';
 import { FunctionAnalyzerWebview } from './webview';
 import { parseWithModifierMacroRepair } from './macroRepair';
+import { buildFlowchart } from './flowModel';
+import { toMermaid } from './flowMermaid';
 import { createExcludeFilter } from './excludePaths';
 import { DefinitionCandidate, DefinitionLookup, resolveDefinitions } from './definitionResolver';
 import {
@@ -62,6 +64,40 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('c-function-analyzer.showDefinitionDiagnostics', () => {
             diagnosisChannel.show(true);
         })
+    );
+
+    // フローチャート（Mermaid 記法）をクリップボードへコピーするコマンド
+    context.subscriptions.push(
+        vscode.commands.registerCommand(
+            'c-function-analyzer.copyFlowchart',
+            async (args?: { filePath?: string; line?: number }) => {
+                await runWithProgress('フローチャートを作成しています…', async () => {
+                    const target = await resolveFlowTarget(args);
+                    if (!target) {
+                        vscode.window.showWarningMessage(
+                            'C言語のソースファイルで、関数の中にカーソルを置いて実行してください。'
+                        );
+                        return;
+                    }
+
+                    const tree = parseWithModifierMacroRepair(parser, target.document.getText());
+                    const flow = buildFlowchart(tree, target.line);
+                    if (!flow) {
+                        vscode.window.showInformationMessage('カーソル位置に関数が見つかりません。');
+                        return;
+                    }
+
+                    await vscode.env.clipboard.writeText(toMermaid(flow));
+                    const notice = flow.hasParseError
+                        ? '（構文エラーがあるため、一部の制御構造が図に含まれていない可能性があります）'
+                        : '';
+                    vscode.window.showInformationMessage(
+                        `${flow.functionName} のフローチャートを Mermaid 形式でコピーしました。`
+                        + `GitHub や Notion に貼り付けると図になります。${notice}`
+                    );
+                }, 'フローチャートの作成中にエラーが発生しました。');
+            }
+        )
     );
 
     // 2. コマンド 'c-function-analyzer.analyze' の登録
@@ -202,6 +238,30 @@ function createDefinitionLookup(
             trees.clear();
         }
     };
+}
+
+/**
+ * フローチャートを作る対象（ファイルとカーソル行）を決めます。
+ *
+ * 解析結果画面から呼ばれた場合は、その画面が対象としている関数を使います。
+ * コマンドパレットから呼ばれた場合は、編集中のファイルとカーソル位置を使います。
+ *
+ * @param args 解析結果画面から渡された対象（省略時は編集中のファイル）
+ * @returns 対象のドキュメントと行。対象が無い場合は null
+ */
+async function resolveFlowTarget(
+    args?: { filePath?: string; line?: number }
+): Promise<{ document: vscode.TextDocument; line: number } | null> {
+    if (args && args.filePath) {
+        const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(args.filePath));
+        return { document, line: args.line ?? 0 };
+    }
+
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.document.languageId !== 'c') {
+        return null;
+    }
+    return { document: editor.document, line: editor.selection.active.line };
 }
 
 /**

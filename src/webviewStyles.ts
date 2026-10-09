@@ -108,7 +108,8 @@ export const WEBVIEW_STYLES = `
             border-color: var(--vscode-button-background, #0e639c);
         }
 
-        /* 定義ジャンプの診断結果を開くボタン */
+        /* フローチャートのコピーと、診断結果を開くボタン */
+        .flowchart-button,
         .diagnosis-button {
             background: var(--surface);
             border: 1px solid var(--border-color);
@@ -121,6 +122,7 @@ export const WEBVIEW_STYLES = `
             transition: color 0.12s ease;
         }
 
+        .flowchart-button:hover,
         .diagnosis-button:hover {
             color: var(--vscode-foreground, #cccccc);
         }

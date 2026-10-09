@@ -83,6 +83,13 @@ export class FunctionAnalyzerWebview {
                             this._commentWidth = clampCommentWidth(message.width);
                         }
                         break;
+                    case 'copyFlowchart':
+                        // 解析した関数を対象に、フローチャートをコピーする
+                        vscode.commands.executeCommand('c-function-analyzer.copyFlowchart', {
+                            filePath: this._result.filePath,
+                            line: this._result.startLine
+                        });
+                        break;
                     case 'showDefinitionDiagnostics':
                         // 定義ジャンプの診断結果（出力パネル）を開く
                         vscode.commands.executeCommand('c-function-analyzer.showDefinitionDiagnostics');

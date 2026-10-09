@@ -421,6 +421,7 @@ ${WEBVIEW_STYLES}
         <div class="header-tools">
 ${renderCopyFormatSelector(copyFormat)}
 ${renderMacroDisplaySelector(macroDisplay)}
+            <button class="flowchart-button" title="関数の構造をフローチャート（Mermaid 記法）としてコピーします。GitHub や Notion に貼り付けると図になります">フローチャートをコピー</button>
             <button class="diagnosis-button" title="定義ジャンプの結果と、うまくいかなかった項目の原因を出力パネルに表示します">定義の診断</button>
         </div>
     </div>
@@ -566,6 +567,13 @@ ${macroFunctions.length > 0 ? renderSection('macro-fn', 'マクロ関数', macro
                 if (value && !button.classList.contains('is-active')) {
                     vscode.postMessage({ command: 'setMacroDisplay', macroDisplay: value });
                 }
+            });
+        });
+
+        // フローチャート（Mermaid 記法）をコピーする
+        document.querySelectorAll('.flowchart-button').forEach(button => {
+            button.addEventListener('click', () => {
+                vscode.postMessage({ command: 'copyFlowchart' });
             });
         });
 

@@ -14,6 +14,7 @@ import {
     VariableInfo
 } from '../../src/analyzer';
 import { parseWithModifierMacroRepair } from '../../src/macroRepair';
+import { buildFlowchart, Flowchart, FlowOptions } from '../../src/flowModel';
 
 /** 初期化済みパーサーのキャッシュ（初期化コストが高いため再利用する） */
 let cachedParser: Parser | null = null;
@@ -137,6 +138,35 @@ export async function describeDefinitionOf(
     }
 
     throw new Error(`名前 "${name}" の定義位置がソース内に見つかりません。`);
+}
+
+/**
+ * Cソースコードから、指定した関数のフロー構造を組み立てます。
+ *
+ * @param source 解析対象のCソースコード
+ * @param signatureHint 対象関数のシグネチャ行を特定するための部分文字列
+ * @param options フロー構造の組み立て時の設定
+ * @returns フロー構造
+ * @throws signatureHint に一致する行が無い場合、または関数が見つからない場合
+ */
+export async function flowOf(
+    source: string,
+    signatureHint: string,
+    options?: FlowOptions
+): Promise<Flowchart> {
+    const parser = await getParser();
+
+    const cursorLine = source.split('\n').findIndex(line => line.includes(signatureHint));
+    if (cursorLine < 0) {
+        throw new Error(`シグネチャ "${signatureHint}" を含む行がソース内に見つかりません。`);
+    }
+
+    const tree = parseWithModifierMacroRepair(parser, source);
+    const flow = buildFlowchart(tree, cursorLine, options);
+    if (!flow) {
+        throw new Error(`カーソル行 ${cursorLine} に関数が見つかりません。`);
+    }
+    return flow;
 }
 
 /**
