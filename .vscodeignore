@@ -10,3 +10,6 @@ test/**
 dist-test/**
 samples/**
 *.vsix
+
+# Claude Code 用のリポジトリ情報（配布物には不要）
+CLAUDE.md
