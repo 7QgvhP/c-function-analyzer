@@ -1,2 +1,6 @@
 # 改行コードはリポジトリ・作業ツリーとも LF に統一する
 * text=auto eol=lf
+
+# バッチファイルは CRLF（共通ルール: 改行は LF、.bat / .cmd のみ CRLF）
+*.bat text eol=crlf
+*.cmd text eol=crlf
