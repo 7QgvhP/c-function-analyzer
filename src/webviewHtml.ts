@@ -273,16 +273,17 @@ function renderCopyFormatSelector(copyFormat: CopyFormat): string {
      *
      * @param format 対応する形式
      * @param label 表示ラベル
+     * @param title マウスを乗せたときに表示する説明
      * @returns 生成したHTML
      */
-    const option = (format: CopyFormat, label: string) =>
-        `<button class="copy-format-option${copyFormat === format ? ' is-active' : ''}" data-format="${format}">${label}</button>`;
+    const option = (format: CopyFormat, label: string, title: string) =>
+        `<button class="copy-format-option${copyFormat === format ? ' is-active' : ''}" data-format="${format}" title="${title}">${label}</button>`;
 
     return `
         <div class="copy-format" role="group" aria-label="コピー形式">
-            <span class="copy-format-label">コピー形式</span>
-            ${option('name', '変数名')}
-            ${option('typeAndName', '型名 + 変数名 + コメント')}
+            <span class="copy-format-label" title="各分類の「コピー」ボタンでコピーする内容の形式を選びます">コピー形式</span>
+            ${option('name', '変数名', '変数名だけを1行に1件ずつコピーします')}
+            ${option('typeAndName', '型名 + 変数名 + コメント', '型名・変数名・定義値・コメントをタブ区切りでコピーします（表計算ソフトに貼り付けると列に分かれます）')}
         </div>`;
 }
 
@@ -340,7 +341,7 @@ function renderMacroDisplaySelector(macroDisplay: MacroDisplay): string {
 
     return `
         <div class="macro-display" role="group" aria-label="マクロの表示">
-            <span class="macro-display-label">マクロ</span>
+            <span class="macro-display-label" title="マクロ変数・マクロ関数の表示場所を選びます">マクロ</span>
             ${option('separate', '分けて表示', 'マクロ変数・マクロ関数を独立した分類に表示します')}
             ${option('merged', '入出力に含める', 'マクロ変数・マクロ関数を入力変数・出力変数・呼び出し関数に含めて表示します')}
         </div>`;
@@ -421,8 +422,10 @@ ${WEBVIEW_STYLES}
         <div class="header-tools">
 ${renderCopyFormatSelector(copyFormat)}
 ${renderMacroDisplaySelector(macroDisplay)}
-            <button class="flowchart-button" title="関数の構造をフローチャート（Mermaid 記法）としてコピーします。GitHub や Notion に貼り付けると図になります">フローチャートをコピー</button>
-            <button class="diagnosis-button" title="定義ジャンプの結果と、うまくいかなかった項目の原因を出力パネルに表示します">定義の診断</button>
+            <div class="header-actions">
+                <button class="flowchart-button" title="関数の構造をフローチャート（Mermaid 記法）としてコピーします。GitHub や Notion に貼り付けると図になります">フローチャートをコピー</button>
+                <button class="diagnosis-button" title="定義ジャンプの結果と、うまくいかなかった項目の原因を出力パネルに表示します">定義の診断</button>
+            </div>
         </div>
     </div>
 ${ambiguousNotice}

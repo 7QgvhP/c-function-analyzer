@@ -57,12 +57,12 @@ export const WEBVIEW_STYLES = `
             color: var(--vscode-foreground, #cccccc);
         }
 
-        /* ヘッダの操作欄（コピー形式と「定義の診断」ボタン） */
+        /* ヘッダの操作欄（コピー形式、マクロの表示方法、操作ボタンを1行ずつ並べる） */
         .header-tools {
             display: flex;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 8px 16px;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 6px;
             margin-top: 10px;
         }
 
@@ -70,6 +70,7 @@ export const WEBVIEW_STYLES = `
         .copy-format {
             display: flex;
             align-items: center;
+            flex-wrap: wrap;
             gap: 5px;
         }
 
@@ -77,7 +78,23 @@ export const WEBVIEW_STYLES = `
         .macro-display {
             display: flex;
             align-items: center;
+            flex-wrap: wrap;
             gap: 5px;
+        }
+
+        /* フローチャートのコピーと「定義の診断」ボタンの行 */
+        .header-actions {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 5px;
+        }
+
+        /* 行の見出し（ボタンの開始位置を揃えるため幅を固定する） */
+        .copy-format-label,
+        .macro-display-label {
+            min-width: 5em;
+            cursor: help;
         }
 
         .macro-display-label {

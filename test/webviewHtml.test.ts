@@ -460,6 +460,33 @@ describe('renderAnalysisHtml: コピー形式の切り替え', () => {
     });
 });
 
+describe('renderAnalysisHtml: ヘッダの操作欄 (v3.8.0)', () => {
+    test('コピー形式、マクロ、操作ボタンの順に1行ずつ並ぶ', () => {
+        const html = renderAnalysisHtml(makeResult(), 'N');
+        const copyFormat = html.indexOf('class="copy-format"');
+        const macroDisplay = html.indexOf('class="macro-display"');
+        const actions = html.indexOf('class="header-actions"');
+        assert.ok(copyFormat >= 0 && macroDisplay > copyFormat && actions > macroDisplay, '3つの行がこの順に出力されること');
+
+        // 操作ボタンの行に、フローチャートのコピーと定義の診断がまとまっていること
+        const actionsRow = html.slice(actions, html.indexOf('</div>', actions));
+        assert.ok(actionsRow.includes('class="flowchart-button"'));
+        assert.ok(actionsRow.includes('class="diagnosis-button"'));
+    });
+
+    test('各ボタンと行の見出しに、マウスを乗せると出る説明がある', () => {
+        const html = renderAnalysisHtml(makeResult(), 'N');
+        for (const cls of [
+            'copy-format-label', 'macro-display-label',
+            'flowchart-button', 'diagnosis-button'
+        ]) {
+            assert.match(html, new RegExp(`class="${cls}"[^>]* title="[^"]+"`), `${cls} に説明があること`);
+        }
+        assert.match(html, /data-format="name" title="[^"]+"/, '「変数名」に説明があること');
+        assert.match(html, /data-format="typeAndName" title="[^"]+"/, '「型名 + 変数名 + コメント」に説明があること');
+    });
+});
+
 describe('renderAnalysisHtml: 同名ファイルの注意表示', () => {
     test('ambiguous な定義の項目に注意マークを出力する', () => {
         const html = renderAnalysisHtml(makeResult({
