@@ -143,6 +143,19 @@ describe('resolveDefinitions: 配列の次元', () => {
         assert.equal(result.outputs[0].type, 'int');
     });
 
+    test('多次元配列では、すべての添字を宣言された次元で置き換える (v3.8.1)', async () => {
+        const result = makeResult({
+            outputs: [{ name: 'array[][]', type: '(推定)', details: '', usage: { line: 1, column: 4 } }]
+        });
+        await resolveDefinitions(result, makeLookup({
+            1: { info: { kind: 'variable', type: 'char', arrayDimensions: ['a', 'b'] } }
+        }));
+
+        // 以前は末尾の `[]` を1つしか取り除かず、array[][a][b] と表示されていた
+        assert.equal(result.outputs[0].name, 'array[a][b]');
+        assert.equal(result.outputs[0].type, 'char');
+    });
+
     test('メンバへのアクセスでは、途中のセグメントの次元もそのセグメントの宣言から埋める', async () => {
         const result = makeResult({
             outputs: [{

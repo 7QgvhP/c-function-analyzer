@@ -215,7 +215,13 @@ async function applyArrayDimensions(
             continue;
         }
 
-        parts[i] = segment.slice(0, -2) + info.arrayDimensions.map(d => `[${d}]`).join('');
+        // 多次元配列（`grid[][]`）では末尾の `[]` がすべて未確定の添字のため、まとめて置き換える
+        const subscripts = segment.match(/(?:\[\])+$/);
+        const subscriptCount = subscripts ? subscripts[0].length / 2 : 0;
+        // 宣言の次元より添字が多い場合（ポインタの配列など）、余った添字は `[]` のまま残す
+        const extra = '[]'.repeat(Math.max(0, subscriptCount - info.arrayDimensions.length));
+        parts[i] = segment.slice(0, segment.length - subscriptCount * 2)
+            + info.arrayDimensions.map(d => `[${d}]`).join('') + extra;
         changed = true;
     }
 
