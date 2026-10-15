@@ -57,7 +57,7 @@ export const WEBVIEW_STYLES = `
             color: var(--vscode-foreground, #cccccc);
         }
 
-        /* ヘッダの操作欄（コピー形式、マクロの表示方法、操作ボタンを1行ずつ並べる） */
+        /* ヘッダの操作欄（コピー形式、マクロ表示、操作ボタンを1行ずつ並べる） */
         .header-tools {
             display: flex;
             flex-direction: column;
@@ -90,39 +90,57 @@ export const WEBVIEW_STYLES = `
             gap: 5px;
         }
 
-        /* 行の見出し（ボタンの開始位置を揃えるため幅を固定する） */
+        /*
+         * 行の見出し（ボタンの開始位置を揃えるため幅を固定する）。
+         * 切り替えボタンと見分けられるよう、枠を持たない太字の文字とし、末尾に「：」を付ける。
+         */
         .copy-format-label,
         .macro-display-label {
-            min-width: 5em;
+            min-width: 6.5em;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--vscode-foreground, #cccccc);
             cursor: help;
         }
 
-        .macro-display-label {
-            font-size: 11px;
-            color: var(--text-muted);
-            margin-right: 3px;
+        /*
+         * 切り替えボタンのまとまり。選択肢を1つの枠の中に隙間なく並べ、
+         * どれか1つを選ぶ切り替えであることが分かるようにする。
+         */
+        .toggle-group {
+            display: inline-flex;
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            overflow: hidden;
         }
 
+        .copy-format-option,
         .macro-display-option {
             background: var(--surface);
-            border: 1px solid var(--border-color);
+            border: none;
             color: var(--text-muted);
             padding: 2px 9px;
             font-family: inherit;
             font-size: 11px;
-            border-radius: 3px;
+            border-radius: 0;
             cursor: pointer;
             transition: background 0.12s ease, color 0.12s ease;
         }
 
+        /* 選択肢の間の区切り線 */
+        .toggle-group > button + button {
+            border-left: 1px solid var(--border-color);
+        }
+
+        .copy-format-option:hover,
         .macro-display-option:hover {
             color: var(--vscode-foreground, #cccccc);
         }
 
+        .copy-format-option.is-active,
         .macro-display-option.is-active {
             background: var(--vscode-button-background, #0e639c);
             color: var(--vscode-button-foreground, #ffffff);
-            border-color: var(--vscode-button-background, #0e639c);
         }
 
         /* フローチャートのコピーと、診断結果を開くボタン */
@@ -149,34 +167,6 @@ export const WEBVIEW_STYLES = `
             cursor: help;
             text-decoration: underline dotted;
             text-underline-offset: 2px;
-        }
-
-        .copy-format-label {
-            font-size: 11px;
-            color: var(--text-muted);
-            margin-right: 3px;
-        }
-
-        .copy-format-option {
-            background: var(--surface);
-            border: 1px solid var(--border-color);
-            color: var(--text-muted);
-            padding: 2px 9px;
-            font-family: inherit;
-            font-size: 11px;
-            border-radius: 3px;
-            cursor: pointer;
-            transition: background 0.12s ease, color 0.12s ease;
-        }
-
-        .copy-format-option:hover {
-            color: var(--vscode-foreground, #cccccc);
-        }
-
-        .copy-format-option.is-active {
-            background: var(--vscode-button-background, #0e639c);
-            color: var(--vscode-button-foreground, #ffffff);
-            border-color: var(--vscode-button-background, #0e639c);
         }
 
         /* 注意表示 */

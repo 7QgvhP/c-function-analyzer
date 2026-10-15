@@ -461,7 +461,7 @@ describe('renderAnalysisHtml: コピー形式の切り替え', () => {
 });
 
 describe('renderAnalysisHtml: ヘッダの操作欄 (v3.8.0)', () => {
-    test('コピー形式、マクロ、操作ボタンの順に1行ずつ並ぶ', () => {
+    test('コピー形式、マクロ表示、操作ボタンの順に1行ずつ並ぶ', () => {
         const html = renderAnalysisHtml(makeResult(), 'N');
         const copyFormat = html.indexOf('class="copy-format"');
         const macroDisplay = html.indexOf('class="macro-display"');
@@ -484,6 +484,22 @@ describe('renderAnalysisHtml: ヘッダの操作欄 (v3.8.0)', () => {
         }
         assert.match(html, /data-format="name" title="[^"]+"/, '「変数名」に説明があること');
         assert.match(html, /data-format="typeAndName" title="[^"]+"/, '「型名 + 変数名 + コメント」に説明があること');
+    });
+
+    test('見出しは「コピー形式：」「マクロ表示：」とし、切り替えボタンは枠でまとめる (v3.9.0)', () => {
+        const html = renderAnalysisHtml(makeResult(), 'N');
+        assert.match(html, /class="copy-format-label"[^>]*>コピー形式：</, '見出しが「コピー形式：」であること');
+        assert.match(html, /class="macro-display-label"[^>]*>マクロ表示：</, '見出しが「マクロ表示：」であること');
+
+        // 見出しは切り替えボタンのまとまりの外に置き、ボタンだけを枠で囲む
+        for (const [row, optionClass] of [['copy-format', 'copy-format-option'], ['macro-display', 'macro-display-option']]) {
+            const start = html.indexOf(`class="${row}"`);
+            const rowHtml = html.slice(start, html.indexOf('</div>', start));
+            const group = rowHtml.indexOf('class="toggle-group"');
+            assert.ok(group > rowHtml.indexOf(`class="${row}-label"`), `${row} の見出しは枠の前にあること`);
+            const groupHtml = rowHtml.slice(group, rowHtml.indexOf('</span>', rowHtml.lastIndexOf(optionClass)));
+            assert.equal(groupHtml.split(`class="${optionClass}`).length - 1, 2, `${row} の2つのボタンが枠の中にあること`);
+        }
     });
 });
 

@@ -281,9 +281,11 @@ function renderCopyFormatSelector(copyFormat: CopyFormat): string {
 
     return `
         <div class="copy-format" role="group" aria-label="コピー形式">
-            <span class="copy-format-label" title="各分類の「コピー」ボタンでコピーする内容の形式を選びます">コピー形式</span>
-            ${option('name', '変数名', '変数名だけを1行に1件ずつコピーします')}
-            ${option('typeAndName', '型名 + 変数名 + コメント', '型名・変数名・定義値・コメントをタブ区切りでコピーします（表計算ソフトに貼り付けると列に分かれます）')}
+            <span class="copy-format-label" title="各分類の「コピー」ボタンでコピーする内容の形式を選びます">コピー形式：</span>
+            <span class="toggle-group">
+                ${option('name', '変数名', '変数名だけを1行に1件ずつコピーします')}
+                ${option('typeAndName', '型名 + 変数名 + コメント', '型名・変数名・定義値・コメントをタブ区切りでコピーします（表計算ソフトに貼り付けると列に分かれます）')}
+            </span>
         </div>`;
 }
 
@@ -340,10 +342,12 @@ function renderMacroDisplaySelector(macroDisplay: MacroDisplay): string {
         + ` data-macro-display="${value}" title="${title}">${label}</button>`;
 
     return `
-        <div class="macro-display" role="group" aria-label="マクロの表示">
-            <span class="macro-display-label" title="マクロ変数・マクロ関数の表示場所を選びます">マクロ</span>
-            ${option('separate', '分けて表示', 'マクロ変数・マクロ関数を独立した分類に表示します')}
-            ${option('merged', '入出力に含める', 'マクロ変数・マクロ関数を入力変数・出力変数・呼び出し関数に含めて表示します')}
+        <div class="macro-display" role="group" aria-label="マクロ表示">
+            <span class="macro-display-label" title="マクロ変数・マクロ関数の表示場所を選びます">マクロ表示：</span>
+            <span class="toggle-group">
+                ${option('separate', '分けて表示', 'マクロ変数・マクロ関数を独立した分類に表示します')}
+                ${option('merged', '入出力に含める', 'マクロ変数・マクロ関数を入力変数・出力変数・呼び出し関数に含めて表示します')}
+            </span>
         </div>`;
 }
 
