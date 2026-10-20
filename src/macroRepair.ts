@@ -26,6 +26,23 @@ const TARGET_NODE_TYPES = new Set(['declaration', 'function_definition', 'field_
 /** 先頭のマクロとみなしうるノード種別 */
 const LEADING_TYPE_NODE_TYPES = new Set(['type_identifier', 'identifier']);
 
+/**
+ * メモリモデル修飾子とみなす識別子（16ビット環境のコンパイラの拡張キーワード）
+ *
+ * `void far func(void)` や `char far *p` のように型と宣言子の間に置かれ、
+ * tree-sitter では ERROR ノードになります。
+ */
+const MEMORY_MODEL_QUALIFIERS = new Set([
+    'far', 'near', 'huge',
+    '_far', '_near', '_huge',
+    '__far', '__near', '__huge'
+]);
+
+/** メモリモデル修飾子を含みうる宣言のノード種別 */
+const QUALIFIER_OWNER_NODE_TYPES = new Set([
+    'declaration', 'function_definition', 'field_declaration', 'parameter_declaration'
+]);
+
 /** 一度に空白化する候補の上限（異常なソースで処理が膨らむのを防ぐ） */
 const MAX_REPAIR_SPANS = 5000;
 
@@ -38,16 +55,18 @@ interface SourceSpan {
 /**
  * ソースをパースし、修飾子マクロによるパース崩れがあれば修復したASTを返します。
  *
- * 修復は次の2段階で行います。誤検出により状態が悪化することはありません。
+ * 修復は次の3段階で行います。誤検出により状態が悪化することはありません。
  *
  * | 段階 | 対象 | 採用条件 |
  * |---|---|---|
  * | 1 | `VOLATILE unsigned long x;` のように型名へ吸収されたマクロ | エラーが増えないこと |
- * | 2 | `GLOBAL BYTE hoge;` のようにパースが崩れたマクロ | エラーが実際に減ること |
+ * | 2 | `void far func(void)` のようなメモリモデル修飾子 | エラーが実際に減ること |
+ * | 3 | `GLOBAL BYTE hoge;` のようにパースが崩れたマクロ | エラーが実際に減ること |
  *
  * 段階1は構文的に不正な形（`unsigned` の前に素の識別子が来る）のみを対象とするため、
- * パースエラーが出ていなくても安全に除去できます。段階2は推定を含むため、
- * エラーが減った場合のみ採用します。
+ * パースエラーが出ていなくても安全に除去できます。段階2・3は推定を含むため、
+ * エラーが減った場合のみ採用します。段階2を先に行うのは、`BYTE far func(void)` で
+ * 段階3が型名の `BYTE` を修飾子マクロと誤認して空白化するのを防ぐためです。
  *
  * @param parser 言語設定済みのパーサー
  * @param source 解析対象のCソースコード
@@ -59,7 +78,12 @@ export function parseWithModifierMacroRepair(parser: Parser, source: string): Pa
     // 段階1: 型名へ吸収されたマクロ（エラーにならないため、エラーの有無によらず判定する）
     current = applyRepair(parser, current, collectAbsorbedMacroSpans, true);
 
-    // 段階2: パースが崩れたマクロ
+    // 段階2: メモリモデル修飾子（far / near / huge）
+    if (current.tree.rootNode.hasError()) {
+        current = applyRepair(parser, current, collectMemoryModelQualifierSpans, false);
+    }
+
+    // 段階3: パースが崩れたマクロ
     if (current.tree.rootNode.hasError()) {
         current = applyRepair(parser, current, collectModifierMacroSpans, false);
     }
@@ -138,6 +162,40 @@ function collectAbsorbedMacroSpans(rootNode: Parser.SyntaxNode): SourceSpan[] {
             return;
         }
         spans.push({ startIndex: first.startIndex, endIndex: first.endIndex });
+    });
+
+    return spans;
+}
+
+/**
+ * パースを崩しているメモリモデル修飾子（`far` / `near` / `huge` など）の範囲を収集します。
+ *
+ * `void far func(void)` の `far` は ERROR ノードになり、`far void func(void)` の `far` は
+ * 型名と解釈されて本来の型が ERROR ノードになります。いずれも、ERROR ノードの直下にあるか、
+ * 宣言のボディ外にエラーがある場合のみを対象とします（`int far = 0;` のように
+ * 変数名として正しく使われている `far` は対象外）。
+ *
+ * @param rootNode ASTのルートノード
+ * @returns 空白化すべき範囲の一覧
+ */
+function collectMemoryModelQualifierSpans(rootNode: Parser.SyntaxNode): SourceSpan[] {
+    const spans: SourceSpan[] = [];
+
+    walk(rootNode, node => {
+        if (spans.length >= MAX_REPAIR_SPANS
+            || !LEADING_TYPE_NODE_TYPES.has(node.type)
+            || !MEMORY_MODEL_QUALIFIERS.has(node.text)) {
+            return;
+        }
+        const parent = node.parent;
+        if (!parent) {
+            return;
+        }
+        const broken = parent.type === 'ERROR'
+            || (QUALIFIER_OWNER_NODE_TYPES.has(parent.type) && hasErrorOutsideBody(parent));
+        if (broken) {
+            spans.push({ startIndex: node.startIndex, endIndex: node.endIndex });
+        }
     });
 
     return spans;

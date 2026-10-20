@@ -2128,8 +2128,10 @@ function describeEnumeratorValue(enumeratorNode: Parser.SyntaxNode): string | un
 /**
  * フェーズ2: カーソル行にある関数定義を同定します。
  *
- * カーソル位置のノードから祖先を辿って function_definition を探すため、
+ * カーソル行を含むノードだけを根から辿って function_definition を探すため、
  * AST全体を走査する必要がありません（`#ifdef` などで入れ子になった関数定義にも対応します）。
+ * 行頭の位置ではなく行全体で判定するため、行頭が空白の場合（字下げされた定義や、
+ * 修飾子マクロ・`far` などを空白化して修復した定義）も同定できます。
  * カーソルがシグネチャ行（戻り値の型の行から引数リストの閉じ括弧の行まで）に
  * ない場合は解析対象外とします。
  *
@@ -2138,30 +2140,42 @@ function describeEnumeratorValue(enumeratorNode: Parser.SyntaxNode): string | un
  * @returns 対象の function_definition ノード、該当しない場合は null
  */
 export function findFunctionAtCursor(rootNode: Parser.SyntaxNode, cursorLine: number): Parser.SyntaxNode | null {
-    // カーソル行の先頭位置にあるノードを起点とする
-    const nodeAtCursor = rootNode.descendantForPosition({ row: cursorLine, column: 0 });
+    let found: Parser.SyntaxNode | null = null;
 
-    // 直近の function_definition の祖先を探す
-    let current: Parser.SyntaxNode | null = nodeAtCursor;
-    while (current && current.type !== 'function_definition') {
-        current = current.parent;
-    }
-    if (!current) {
-        return null;
-    }
+    const visit = (node: Parser.SyntaxNode): void => {
+        for (let i = 0; i < node.childCount && !found; i++) {
+            const child = node.child(i)!;
+            // カーソル行を含まないノードは辿らない
+            if (cursorLine < child.startPosition.row || cursorLine > child.endPosition.row) {
+                continue;
+            }
+            if (child.type !== 'function_definition') {
+                visit(child);
+            } else if (isOnSignatureRow(child, cursorLine)) {
+                found = child;
+            }
+        }
+    };
 
-    // シグネチャ行の範囲内にカーソルがあるかを判定する
-    const declaratorNode = current.childForFieldName('declarator');
+    visit(rootNode);
+    return found;
+}
+
+/**
+ * カーソル行が関数定義のシグネチャ行の範囲内にあるかを判定します。
+ *
+ * @param funcNode function_definition ノード
+ * @param cursorLine カーソル行（0始まり）
+ * @returns 戻り値の型の行から引数リストの閉じ括弧の行までにあれば true
+ */
+function isOnSignatureRow(funcNode: Parser.SyntaxNode, cursorLine: number): boolean {
+    const declaratorNode = funcNode.childForFieldName('declarator');
     if (!declaratorNode) {
-        return null;
+        return false;
     }
-    const sigStartRow = current.startPosition.row;      // 戻り値の型から開始
+    const sigStartRow = funcNode.startPosition.row;     // 戻り値の型から開始
     const sigEndRow = declaratorNode.endPosition.row;   // 引数リストの閉じ括弧で終了
-
-    if (cursorLine < sigStartRow || cursorLine > sigEndRow) {
-        return null;
-    }
-    return current;
+    return cursorLine >= sigStartRow && cursorLine <= sigEndRow;
 }
 
 /**

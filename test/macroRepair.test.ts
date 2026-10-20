@@ -220,3 +220,29 @@ describe('parseWithModifierMacroRepair: 修復対象外', () => {
         assert.doesNotThrow(() => parseWithModifierMacroRepair(parser, source));
     });
 });
+
+describe('parseWithModifierMacroRepair: メモリモデル修飾子 (v3.9.2)', () => {
+    /** far / near / huge を含むコードと、修復後の型名 */
+    const CASES: { source: string; expected: string }[] = [
+        { source: 'void far func(void) {}', expected: 'void' },
+        { source: 'far void func(void) {}', expected: 'void' },
+        { source: 'BYTE far func(void) {}', expected: 'BYTE' },
+        { source: 'char far *p;', expected: 'char' },
+        { source: 'void huge *buf;', expected: 'void' }
+    ];
+
+    for (const c of CASES) {
+        test(`${c.source} の型は ${c.expected}`, async () => {
+            const parser = await getParser();
+            assert.equal(firstDeclaredType(parser, c.source), c.expected);
+            assert.equal(parseWithModifierMacroRepair(parser, c.source).rootNode.hasError(), false);
+        });
+    }
+
+    test('far という名前の変数は空白化しない', async () => {
+        const parser = await getParser();
+        const source = 'int far = 0;';
+        const tree = parseWithModifierMacroRepair(parser, source);
+        assert.equal(tree.rootNode.text, source);
+    });
+});

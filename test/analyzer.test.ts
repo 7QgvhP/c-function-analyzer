@@ -189,6 +189,80 @@ int multi(
     });
 });
 
+describe('far 修飾子付きの関数定義 (v3.9.2)', () => {
+    /** 修飾子の位置ごとの関数定義と、期待する戻り値の型 */
+    const CASES: { label: string; signature: string; returnType: string }[] = [
+        { label: '型の後ろ', signature: 'void far func(int a)', returnType: 'void' },
+        { label: '型の前', signature: 'far void func(int a)', returnType: 'void' },
+        { label: 'static 付き', signature: 'static void far func(int a)', returnType: 'void' },
+        { label: 'typedef 型の後ろ', signature: 'BYTE far func(int a)', returnType: 'BYTE' },
+        { label: '__far', signature: 'void __far func(int a)', returnType: 'void' },
+        { label: 'near', signature: 'void near func(int a)', returnType: 'void' },
+        { label: 'ポインタの戻り値', signature: 'char far *func(int a)', returnType: 'char*' }
+    ];
+
+    for (const c of CASES) {
+        test(`${c.label}: ${c.signature} を解析できる`, async () => {
+            const r = await analyzeOrThrow(`
+${c.signature}
+{
+    g_out = a;
+    return 0;
+}
+`, c.signature);
+            assert.equal(r.functionName, 'func');
+            assert.equal(r.returnType, c.returnType);
+            assert.deepEqual(names(r.inputs), ['a']);
+        });
+    }
+
+    test('far 付きの引数・ローカル変数は変数として扱われ、far は変数に表示されない', async () => {
+        const r = await analyzeOrThrow(`
+void far func(char far *src)
+{
+    char far *p;
+    p = src;
+}
+`, 'void far func(');
+        assert.ok(names(r.inputs).includes('src'), `入力に src が含まれること: ${names(r.inputs)}`);
+        assert.ok(names(r.internalVariables).includes('p'), `ローカル変数に p が含まれること: ${names(r.internalVariables)}`);
+        const all = [...r.inputs, ...r.outputs, ...r.internalVariables].map(v => v.name);
+        assert.ok(!all.includes('far'), `far が変数として表示されないこと: ${all}`);
+    });
+
+    test('far という名前の変数は修復の対象外', async () => {
+        const r = await analyzeOrThrow(`
+int func(int a)
+{
+    int far = a;
+    return far;
+}
+`, 'int func(');
+        assert.ok(names(r.internalVariables).includes('far'), `ローカル変数に far が含まれること: ${names(r.internalVariables)}`);
+    });
+
+    test('修飾子マクロ付きの関数定義（行頭が空白化される）も解析できる', async () => {
+        const r = await analyzeOrThrow(`
+GLOBAL void func(int a)
+{
+    g_out = a;
+}
+`, 'GLOBAL void func(');
+        assert.equal(r.functionName, 'func');
+        assert.equal(r.returnType, 'void');
+    });
+
+    test('字下げされた関数定義も解析できる', async () => {
+        const r = await analyzeOrThrow(`
+    int func(int a)
+    {
+        return a;
+    }
+`, 'int func(');
+        assert.equal(r.functionName, 'func');
+    });
+});
+
 describe('フェーズ5: 引数の入出力分類', () => {
     test('値渡し引数は入力に分類される', async () => {
         const r = await analyzeOrThrow(`

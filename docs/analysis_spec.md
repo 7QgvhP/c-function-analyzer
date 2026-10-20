@@ -88,7 +88,7 @@ GLOBAL BYTE hoge;   →   "      BYTE hoge;"
 
 ### 修復対象の判定
 
-修復は2段階に分かれます。崩れ方によって、パースエラーが出る場合と出ない場合があるためです。
+修復は3段階に分かれます。崩れ方によって、パースエラーが出る場合と出ない場合があるためです。
 
 #### 段階1: 型名へ吸収されたマクロ (`collectAbsorbedMacroSpans`)
 
@@ -103,7 +103,15 @@ sized_type_specifier  |VOLATILE unsigned long|
 
 C言語では `unsigned` などの前に素の識別子が来ることはないため、**`sized_type_specifier` の先頭が `type_identifier` である形は必ず修飾子マクロ**です。エラーの有無によらず対象とします。
 
-#### 段階2: パースが崩れたマクロ (`collectModifierMacroSpans`)
+#### 段階2: メモリモデル修飾子 (`collectMemoryModelQualifierSpans`)
+
+16ビット環境のコンパイラの拡張キーワード `far` / `near` / `huge`（`_far` / `__far` などの表記を含む）は、tree-sitter では素の識別子として扱われ、`void far func(void)` では `far` が ERROR ノードに、`far void func(void)` では `far` が型名に、本来の型が ERROR ノードになります。
+
+これらの識別子のうち、ERROR ノードの直下にあるもの、または宣言（`declaration` / `function_definition` / `field_declaration` / `parameter_declaration`）のボディ外にエラーがある場合のものを空白化します。`int far = 0;` のように変数名として正しく使われている `far` は対象外です。
+
+段階3より先に行うのは、`BYTE far func(void)` で段階3が型名の `BYTE` を修飾子マクロと誤認して空白化するのを防ぐためです。
+
+#### 段階3: パースが崩れたマクロ (`collectModifierMacroSpans`)
 
 以下をすべて満たす `declaration` / `function_definition` / `field_declaration` の先頭トークンを対象とします。
 
@@ -121,7 +129,7 @@ C言語では `unsigned` などの前に素の識別子が来ることはない�
 | 段階 | 判定の性質 | 採用条件 |
 |---|---|---|
 | 1 | 構文的に確実 | エラー数が**増えない**こと |
-| 2 | 推定を含む | エラー数が**実際に減る**こと |
+| 2・3 | 推定を含む | エラー数が**実際に減る**こと |
 
 誤検出により解析結果が悪化することはなく、正常なコードや本当に構文エラーがあるコードはそのまま扱われます。また、空白化するのは検出した箇所のみのため、`#define GLOBAL extern` の記述自体は影響を受けません。
 
@@ -139,6 +147,8 @@ C言語では `unsigned` などの前に素の識別子が来ることはない�
 | `GLOBAL BYTE a, b;` | `BYTE` |
 | `GLOBAL S16 hal_read(void);` | `S16`（呼び出し関数の戻り値型） |
 | `VOLATILE unsigned long status;` | `unsigned long`（段階1で修復） |
+| `void far func(void) { ... }` | `void`（段階2で修復） |
+| `char far *p;` | `char`（段階2で修復） |
 
 関数定義（`GLOBAL void func(void) { ... }`）、関数内のローカル宣言（`LOCAL BYTE tmp;`）、構造体メンバ（`VOLATILE int hw_reg;`）も対象です。
 
@@ -548,7 +558,8 @@ a = (BYTE)-hoge;
 
 ユーザーがエディタ上でカーソルを置いている行（`cursorLine`）が含まれる `function_definition` ノードを特定します。
 
-- **探索方法**: カーソル行の先頭位置から `descendantForPosition` でノードを取得し、そこから**親方向へ辿って**最も近い `function_definition` を探します。AST 全体を走査しないため探索コストは木の深さに比例します。また、`#ifdef` などのプリプロセッサ条件ブロック内に入れ子になった関数定義も同じ仕組みで同定できます。
+- **探索方法**: ルートから、**カーソル行を含むノードだけを子方向へ辿って** `function_definition` を探します。カーソル行を含まないノードは辿らないため、AST 全体を走査する必要はありません。また、`#ifdef` などのプリプロセッサ条件ブロック内に入れ子になった関数定義も同じ仕組みで同定できます。
+- **行頭が空白の場合**: 行頭の1点ではなく行全体で判定するため、字下げされた関数定義や、フェーズ0で先頭の修飾子マクロ・`far` を空白化した関数定義（`GLOBAL void func(void)`、`far void func(void)`）も同定できます。
 - **シグネチャ位置判定**: 関数の戻り値型の開始行から、引数リストの閉じ括弧 `)`（`declaratorNode.endPosition.row`）までの行範囲内にカーソルがある場合のみ解析を実行します（関数ボディの中央などで実行された場合はスキップされます）。
 
 ---
