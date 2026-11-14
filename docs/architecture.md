@@ -1,25 +1,66 @@
-# C Function Analyzer 関数解析・分類 技術仕様書
+# 設計
 
-本ドキュメントは、**C Function Analyzer** 拡張機能が C 言語の関数を解析し、変数や関数呼び出しをどのように分類・抽出しているか（データフロー・構文解析ロジック）を詳細に説明します。
+## 全体構成
 
----
+```mermaid
+flowchart LR
+    E[extension.ts<br/>コマンド・進捗表示] --> MR[macroRepair.ts<br/>パース崩れの修復]
+    MR --> TS[web-tree-sitter<br/>C 言語 WASM]
+    E --> AN[analyzer.ts<br/>関数の解析・分類]
+    AN --> DR[definitionResolver.ts<br/>定義位置の解決]
+    DR --> VS[(VS Code の定義プロバイダ<br/>C/C++ 拡張)]
+    DR --> EX[excludePaths.ts]
+    AN --> DD[definitionDiagnosis.ts<br/>定義ジャンプの診断]
+    E --> FM[flowModel.ts → flowMermaid.ts<br/>フローチャート]
+    E --> W[webview.ts<br/>パネル・ハイライト・クリップボード]
+    W --> WH[webviewHtml.ts / webviewStyles.ts]
+    W --> HL[highlight.ts]
+```
 
-## 概要
+## ディレクトリ構成と各モジュールの責務
 
-本拡張機能は、C 言語ソースファイル（`.c`, `.h`）に対して [web-tree-sitter](https://github.com/tree-sitter/tree-sitter)（C 言語用 WASM）による構文解析（AST: 抽象構文木）を実行し、カーソル位置にある関数定義を解析して以下のカテゴリに分類・表示します。
+| パス | 責務 |
+|---|---|
+| `src/extension.ts` | 起動、コマンド（解析・診断・フローチャート）の登録、進捗表示、パーサーの初期化 |
+| `src/analyzer.ts` | 関数の解析と分類（下記「解析処理の詳細」のフェーズ1〜5） |
+| `src/macroRepair.ts` | 修飾子マクロによるパース崩れの修復（フェーズ0） |
+| `src/definitionResolver.ts` | 定義プロバイダで定義位置を求め、型名・コメント・定義値を読み取る |
+| `src/excludePaths.ts` | 定義位置の候補を `excludePaths` で絞り込む |
+| `src/definitionDiagnosis.ts` | 定義ジャンプがうまくいかない原因の判定 |
+| `src/flowModel.ts`、`src/flowMermaid.ts` | 関数の制御構造のモデル化と、Mermaid のテキストの生成 |
+| `src/webview.ts` | 解析結果のパネルの管理、エディタのハイライト、クリップボード |
+| `src/webviewHtml.ts`、`src/webviewStyles.ts` | Webview の HTML とスタイル（VS Code API に依存しない） |
+| `src/highlight.ts` | ハイライト検索用の正規表現の生成 |
+| `scripts/copy-wasm.js` | ビルド時に WASM をコピーする |
+| `test/` | `node:test` によるテスト（`test/support/` は共通の補助） |
+| `samples/` | 動作確認用のサンプル（3階層のインクルード） |
 
-| 分類 | 項目名 | 概要 | 主な判定条件 |
-|---|---|---|---|
-| 🔵 **入力変数** | `inputs` | 関数内で参照（読み取り）される変数 | 値渡し引数、ポインタ参照される引数、読み取りが行われるグローバル変数 |
-| 🔴 **出力変数** | `outputs` | 関数外へ影響を与える書き込み変数 / 戻り値 | ポインタ経由で書き込まれる引数、書き込みが行われるグローバル変数、関数の戻り値 |
-| 🟣 **内部変数** | `internalVariables` | 関数内部で宣言・使用されるローカル変数 | 関数ボディ内で `declaration` として定義されたローカル変数 |
-| 🟢 **呼び出し関数** | `calledFunctions` | 関数内部で直接呼び出されている関数 | `call_expression` で呼び出される関数名（小文字混じり） |
-| 🟠 **マクロ変数** | `macroVariables` | マクロとして定義・参照されている変数 | 大文字のみのグローバル変数（`classifyAllUppercaseAsMacros` 有効時） |
-| 🟡 **マクロ関数** | `macroFunctions` | マクロ関数として呼び出されている項目 | 大文字のみの呼び出し関数（`classifyAllUppercaseAsMacros` 有効時） |
+## データの流れ
 
----
+1. ソースをパースし、修飾子マクロによるパース崩れを修復する（フェーズ0）。
+2. ファイルスコープの型情報（構造体、関数、typedef、マクロ、enum、コメント、型名）を集める（フェーズ1）。
+3. カーソル位置の関数を特定し（フェーズ2）、シグネチャ（フェーズ3）とボディ（フェーズ4）を解析して、入出力などに分類する（フェーズ5）。
+4. 参照位置で定義プロバイダを呼び、定義位置から型名・コメント・定義値を補う（フェーズ6）。あわせて定義ジャンプの診断を行う。
+5. Webview に描画する。
 
-## 解析の全体フロー
+各フェーズの詳細は、下記「解析処理の詳細」を参照。設計判断は [ADR](adr/README.md) を参照。
+
+## 外部依存
+
+| 依存 | 用途 |
+|---|---|
+| `web-tree-sitter`（`0.20.8`。実行時の唯一の依存） | C ソースの構文解析（[ADR 0002](adr/0002-use-tree-sitter.md)） |
+| `tree-sitter-wasms`（開発用） | C 言語パーサーの WASM の供給元（`scripts/copy-wasm.js` でコピー） |
+| VS Code の定義プロバイダ（C/C++ 拡張） | 定義位置の解決（[ADR 0003](adr/0003-definition-via-vscode-provider.md)） |
+| 開発用: TypeScript、esbuild、`@types/vscode`、`@types/node` | ビルドと型 |
+
+## 解析処理の詳細
+
+旧技術仕様書（`docs/analysis_spec.md`）の本文を移したもの。コードと食い違う箇所を見つけたものには注記した。
+
+> TODO(要確認): 旧仕様書の全体を、現在のソースと照らし合わせてはいない（関数名がソースに存在するかだけを確かめた）。
+
+### 解析の全体フロー
 
 ```mermaid
 flowchart TD
@@ -35,7 +76,7 @@ flowchart TD
     G --> H["Webview へ描画・ハイライト機能適用"]
 ```
 
-### 実装との対応
+#### 実装との対応
 
 各フェーズは `src/analyzer.ts` の同名関数に1対1で対応しており、`analyzeCFunction` はこれらを順に呼び出すだけの薄い関数です。
 
@@ -49,13 +90,12 @@ flowchart TD
 | 5 | `buildResult` |
 | 6 | `resolveDefinitions`（`definitionResolver.ts`。定義位置から型名・コメントを補う） |
 
----
 
-## フェーズ 0: 修飾子マクロによるパース崩れの修復 (`macroRepair.ts`)
+### フェーズ 0: 修飾子マクロによるパース崩れの修復 (`macroRepair.ts`)
 
-解析に入る前に、ソースのパース結果を必要に応じて修復します。解析対象ファイル（`extension.ts`）とインクルードファイル（`includeResolver.ts`）の双方に適用されます。
+解析に入る前に、ソースのパース結果を必要に応じて修復します。解析対象ファイル（`extension.ts`）とインクルードファイル（`includeResolver.ts`。現在のソースにこのファイルはない。v3.0.0 で、自前の `#include` 探索を VS Code の定義プロバイダに置き換えた）の双方に適用されます。
 
-### 問題
+#### 問題
 
 組み込み系のCコードでは、記憶域クラスをマクロで隠す記法が広く使われます。
 
@@ -76,7 +116,7 @@ declaration
 
 その結果、型名が `GLOBAL` と表示され、さらに `BYTE` がグローバル変数として誤検出されます。
 
-### 修復方式
+#### 修復方式
 
 崩れ方は記法ごとに大きく異なり（ポインタ・配列・初期化子・`unsigned` の有無などで7通り以上のAST形状になる）、崩れたASTを個別に補正するのは現実的ではありません。そのため、**先頭のマクロ部分を同じ長さの空白へ置き換えて再パースする**方式を採ります。
 
@@ -86,11 +126,11 @@ GLOBAL BYTE hoge;   →   "      BYTE hoge;"
 
 文字数が変わらないため、行・列・オフセットはすべて元のソースと一致します。定義位置ジャンプやハイライトなど、下流の処理は一切変更不要です。
 
-### 修復対象の判定
+#### 修復対象の判定
 
 修復は3段階に分かれます。崩れ方によって、パースエラーが出る場合と出ない場合があるためです。
 
-#### 段階1: 型名へ吸収されたマクロ (`collectAbsorbedMacroSpans`)
+##### 段階1: 型名へ吸収されたマクロ (`collectAbsorbedMacroSpans`)
 
 `VOLATILE unsigned long status;` は**エラーなくパースされ**、型名が `VOLATILE unsigned long` になります。
 
@@ -103,7 +143,7 @@ sized_type_specifier  |VOLATILE unsigned long|
 
 C言語では `unsigned` などの前に素の識別子が来ることはないため、**`sized_type_specifier` の先頭が `type_identifier` である形は必ず修飾子マクロ**です。エラーの有無によらず対象とします。
 
-#### 段階2: メモリモデル修飾子 (`collectMemoryModelQualifierSpans`)
+##### 段階2: メモリモデル修飾子 (`collectMemoryModelQualifierSpans`)
 
 16ビット環境のコンパイラの拡張キーワード `far` / `near` / `huge`（`_far` / `__far` などの表記を含む）は、tree-sitter では素の識別子として扱われ、`void far func(void)` では `far` が ERROR ノードに、`far void func(void)` では `far` が型名に、本来の型が ERROR ノードになります。
 
@@ -111,7 +151,7 @@ C言語では `unsigned` などの前に素の識別子が来ることはない�
 
 段階3より先に行うのは、`BYTE far func(void)` で段階3が型名の `BYTE` を修飾子マクロと誤認して空白化するのを防ぐためです。
 
-#### 段階3: パースが崩れたマクロ (`collectModifierMacroSpans`)
+##### 段階3: パースが崩れたマクロ (`collectModifierMacroSpans`)
 
 以下をすべて満たす `declaration` / `function_definition` / `field_declaration` の先頭トークンを対象とします。
 
@@ -122,7 +162,7 @@ C言語では `unsigned` などの前に素の識別子が来ることはない�
 
 `GLOBAL unsigned char uc;` のように先頭マクロが `sized_type_specifier` へ取り込まれる場合は、その内側の先頭要素を対象とします。
 
-### 安全策
+#### 安全策
 
 段階ごとに採用条件が異なります。
 
@@ -133,7 +173,7 @@ C言語では `unsigned` などの前に素の識別子が来ることはない�
 
 誤検出により解析結果が悪化することはなく、正常なコードや本当に構文エラーがあるコードはそのまま扱われます。また、空白化するのは検出した箇所のみのため、`#define GLOBAL extern` の記述自体は影響を受けません。
 
-### 対応する記法
+#### 対応する記法
 
 | 記法 | 修復後の型名 |
 |---|---|
@@ -152,9 +192,8 @@ C言語では `unsigned` などの前に素の識別子が来ることはない�
 
 関数定義（`GLOBAL void func(void) { ... }`）、関数内のローカル宣言（`LOCAL BYTE tmp;`）、構造体メンバ（`VOLATILE int hw_reg;`）も対象です。
 
----
 
-## フェーズ 1: ファイルスコープ（グローバル）型情報の収集
+### フェーズ 1: ファイルスコープ（グローバル）型情報の収集
 
 関数解析に先立ち、ファイル全体の AST ルートノードから直下の `declaration`（変数宣言）をスキャンし、グローバル変数の名前と型のマッピング（`fileScopeVars`）を作成します。
 
@@ -173,7 +212,7 @@ int prototype(int);                  // 関数プロトタイプ宣言のため�
 
 なお、変数宣言のスキャン処理（`collectDeclaredVars`）はファイルスコープとローカル変数で共通化されており、カンマ区切りの複数宣言・初期化子付き宣言・配列・多重ポインタ・関数ポインタ宣言に対応します。
 
-### 配列の次元の表記ルール
+#### 配列の次元の表記ルール
 
 配列の次元は**名前と型名のどちらか一方にのみ**表示します。両方に出すと冗長になるためです。
 
@@ -183,7 +222,7 @@ int prototype(int);                  // 関数プロトタイプ宣言のため�
 | 添字なしで参照されている | **型名** | 名前 `table` / 型 `int[8]` |
 | 内部変数（名前は宣言名そのもの） | **型名** | 名前 `local_arr` / 型 `int[5]` |
 
-#### 構造体メンバの型解決 (`resolveAccessPath`)
+##### 構造体メンバの型解決 (`resolveAccessPath`)
 
 アクセスパスを区切り文字（`.` と `->`）で分割し、構造体定義を辿って**最終的に参照しているメンバの型**を決定します。
 
@@ -217,7 +256,7 @@ var_ptr->sub.member
 
 ポインタ引数のメンバアクセス（`data->id`）にも同じ解決を適用します。引数そのもの（`*out = 1` の `out`）は従来どおり引数の宣言行を指します。
 
-#### アクセスパスへの次元の反映
+##### アクセスパスへの次元の反映
 
 添字でアクセスされた変数のアクセスパスは、いったん `[]` に正規化された後、**宣言された次元で置き換え**られます。置き換えは**セグメントごと**に行われ、各セグメントが指す変数・メンバの次元が使われます（`tbl[].id` の `[]` には `tbl` の次元が、`cfg.name[]` の `[]` にはメンバ `name` の次元が入ります）。
 
@@ -231,7 +270,7 @@ var_ptr->sub.member
 
 添字の値（`[2]` と `[i]`）によらず同じ表示名になるため、**同一変数への複数のアクセスは1件に集約**されます。
 
-#### 型名の表記
+##### 型名の表記
 
 | 宣言 | 型名の表示（添字なし参照・内部変数の場合） |
 |---|---|
@@ -250,13 +289,13 @@ void f(int param_arr[5])   // 型は int*  （減衰するため）
 int  local_arr[5];         // 型は int[5]（減衰しない）
 ```
 
-#### 名前フィールドは機能的なフィールドである
+##### 名前フィールドは機能的なフィールドである
 
 名前フィールドはハイライト検索の正規表現とコピー対象を兼ねます。そのため、名前に添字を含める場合は `buildHighlightRegex` が**添字の中身によらず任意の添字にマッチ**する必要があります（`hoge[N]` という表示名でコード上の `hoge[2]` を見つけられなければならない）。
 
 同じ理由から、**内部変数の名前には配列の次元を付けません**。内部変数の名前は宣言名そのもの（`hoge_array`）であり、ここに `[]` を付けると `memcpy(dst, hoge_array, n)` や `sizeof(hoge_array)` のような添字を伴わない参照がハイライトから漏れてしまいます。
 
-### ファイルスコープの走査範囲 (`forEachFileScopeNode`)
+#### ファイルスコープの走査範囲 (`forEachFileScopeNode`)
 
 宣言の走査は、AST ルート直下だけでなく**プリプロセッサ条件ブロックの内側も透過的に降りて**行います（`preproc_ifdef` / `preproc_if` / `preproc_elif` / `preproc_else`）。関数ボディの内側には入りません。
 
@@ -271,7 +310,7 @@ extern int shared_counter;
 
 条件の真偽は評価せず、`#if` / `#elif` / `#else` のいずれに書かれた宣言もすべて収集します。
 
-### 構造体・共用体定義の収集 (`collectStructDefinitions`)
+#### 構造体・共用体定義の収集 (`collectStructDefinitions`)
 
 `struct_specifier` / `union_specifier` のうち **`body`（`field_declaration_list`）を持つもの**を定義とみなし、メンバ名と型を収集します（`struct Sub sub;` のような型参照は `body` を持たないため対象外です）。
 
@@ -289,7 +328,7 @@ extern int shared_counter;
 
 関数ボディ内で定義されたローカルな型は収集対象外です。
 
-#### メンバの走査範囲 (`collectStructMembers`)
+##### メンバの走査範囲 (`collectStructMembers`)
 
 構造体本体は、直下の `field_declaration` だけを見ても足りません。次の記法ではメンバが一段内側に入るためです。
 
@@ -304,7 +343,7 @@ extern int shared_counter;
 
 `inlineMembers` は `resolveAccessPath` がメンバを引くときに型名検索より優先されます。無名の構造体・共用体はタグ名を持たず、型名から定義を引けないためです。
 
-#### ノードの同一判定 (`isSameNode`)
+##### ノードの同一判定 (`isSameNode`)
 
 `web-tree-sitter` は `child()` や `childForFieldName()` を呼ぶたびに**新しいラッパーオブジェクト**を返すため、同じノードでも `===` による比較は false になります。ノードの識別には `id` を使います。
 
@@ -315,7 +354,7 @@ node.child(0).id === node.child(0).id    // true
 
 型指定子を宣言子の走査から除外する箇所（`collectDeclaredVars` など）で使用します。
 
-### 関数名の収集 (`collectFileScopeFunctions`)
+#### 関数名の収集 (`collectFileScopeFunctions`)
 
 変数の型情報とは別に、ファイル内で宣言・定義されている**関数の名前と戻り値の型**も収集します。戻り値の型は呼び出し関数の型名欄に表示されます。
 
@@ -337,7 +376,7 @@ node.child(0).id === node.child(0).id    // true
 
 型指定子のフィールドが取得できない形では、従来どおり宣言子の手前までのテキストで代用します。
 
-#### 関数ポインタ変数との判別
+##### 関数ポインタ変数との判別
 
 `char *fetch(void);`（ポインタを返す関数）と `int (*fp)(int);`（関数ポインタ変数）は**どちらもポインタ深さが 1** になるため、深さでは判別できません。宣言子を降りる際の**ポインタの位置**で判別します。
 
@@ -350,7 +389,7 @@ node.child(0).id === node.child(0).id    // true
 
 これはフェーズ4で、関数名が値として参照されているだけの場合にグローバル変数と誤分類しないための除外リストとして使用します（詳細は「4.4 識別子の参照・読み取り判定」を参照）。
 
-### typedef 別名の収集 (`collectTypeAliases`)
+#### typedef 別名の収集 (`collectTypeAliases`)
 
 `typedef` の別名（別名 → 元の型名）を収集します。構造体の定義と `typedef` を別に書いた場合、別名からは中身を直接引けないためです。
 
@@ -363,7 +402,7 @@ typedef struct ConfigTag Config;   /* typedef の位置に中身がない */
 
 実体が見つからない場合（前方宣言のみ、システムヘッダ内の型など）は、根元の変数の型をそのまま表示します。
 
-### マクロ定義の収集 (`collectMacros`)
+#### マクロ定義の収集 (`collectMacros`)
 
 `#define` からマクロ名・定義値・定義位置を収集します。オブジェクト形式（`#define MAX 10`）と関数形式（`#define SQ(x) ((x)*(x))`）の双方に対応します。
 
@@ -392,7 +431,7 @@ typedef struct ConfigTag Config;   /* typedef の位置に中身がない */
 
 定義値には別のマクロや変数が書かれていることがあるため、表示幅は名前より優先して確保します。収まらない場合は末尾を省略し、全文は `title` 属性（ホバー）で参照できます。
 
-#### enum 列挙子の収集 (`collectEnumConstants`)
+##### enum 列挙子の収集 (`collectEnumConstants`)
 
 `enum` の列挙子は `#define` と同じく「名前に値が結び付いた定数」であるため、同じマップ（`FileScopeSymbols.macros`）へ登録し、マクロ変数として表示します。型名欄は `enum` として `#define` 由来と区別します（`MacroDefinition.kind`）。
 
@@ -412,7 +451,7 @@ typedef struct ConfigTag Config;   /* typedef の位置に中身がない */
 - 関数ボディ内で定義されたローカルな `enum` は対象外です
 - 同名の `#define` が既に登録されている場合は上書きしません（プリプロセッサが先に展開するため）
 
-### 宣言のコメントの収集 (`findTrailingComment`)
+#### 宣言のコメントの収集 (`findTrailingComment`)
 
 宣言の右側に書かれたコメントを収集し、専用の欄へ表示します。組込みコードでは変数の説明を宣言の右に書く習慣が広くあるためです。
 
@@ -450,7 +489,7 @@ field_declaration_list
 
 構造体メンバのコメントは、型・定義位置と同様に `resolveAccessPath` を通じて最終メンバのものが使われます。
 
-### 型として使われている名前の収集 (`collectTypeNames`)
+#### 型として使われている名前の収集 (`collectTypeNames`)
 
 組込みコードでは `#define BYTE unsigned char` のように型をマクロで定義することが多く、これがキャストの解釈に影響します。
 
@@ -489,7 +528,7 @@ a = (BYTE)-hoge;
 
 除外は「**変数として宣言されていない場合のみ**」適用します。宣言が見つかる名前は実在する変数のため、そちらを優先します。値を持つマクロ（`#define MAX_LIMIT 100`）と `enum` の列挙子は値であるため対象外です。
 
-### 定義位置の解決 (`definitionResolver.ts`)
+#### 定義位置の解決 (`definitionResolver.ts`)
 
 他ファイルで宣言されたシンボルの型名・コメント・定義値は、**VS Code の定義プロバイダ（F12 と同じもの）**から得た定義位置を読んで求めます。自前で `#include` を辿る方式は v3.0.0 で廃止しました。
 
@@ -500,7 +539,7 @@ a = (BYTE)-hoge;
 4. 定義位置の宣言を読む        describeDefinitionSite
 ```
 
-#### 参照位置の記録 (`accessTargetNode`)
+##### 参照位置の記録 (`accessTargetNode`)
 
 各シンボルが現在のファイルで**最初に現れる位置**を記録します。アクセスパスでは**最後のメンバ**の位置を採ることで、そこから直接メンバの宣言へ到達できます。
 
@@ -516,7 +555,7 @@ a = (BYTE)-hoge;
 
 参照位置を持たない項目（引数そのもの・ローカル変数・戻り値）は、現在のファイルだけで型もコメントも分かるため解決の対象外です。
 
-#### 定義位置の読み取り (`describeDefinitionSite`)
+##### 定義位置の読み取り (`describeDefinitionSite`)
 
 定義位置を含む宣言まで遡り、種別に応じて情報を取り出します。
 
@@ -530,7 +569,7 @@ a = (BYTE)-hoge;
 
 型をマクロで定義している場合（`#define BYTE unsigned char`）は、値が型指定子だけで構成されているかを判定し、型として扱います（`isTypeMacroValue`）。`#define BYTE U8` のような連鎖は、**同じファイル内**の定義を辿って判定します。
 
-#### 候補の絞り込み (`excludePaths.ts`)
+##### 候補の絞り込み (`excludePaths.ts`)
 
 定義プロバイダは候補を複数返すことがあります（ビルド時に切り替える同名ファイルなど）。設定 `excludePaths` に該当するものを取り除きます。
 
@@ -543,7 +582,7 @@ a = (BYTE)-hoge;
 - 絞り込み後も複数残る場合は、先頭を採用したうえで注意マークを表示します
 - フォルダ名指定はワークスペース内のみを対象とし、ファイル名は判定に含めません。大文字・小文字は区別しません
 
-#### 解決結果の反映
+##### 解決結果の反映
 
 | 定義の種別 | 反映内容 |
 |---|---|
@@ -554,7 +593,7 @@ a = (BYTE)-hoge;
 
 定義位置を特定できなかった項目は、型名を `(推定)` のままとし「定義へ」ボタンを出しません。
 
-## フェーズ 2: カーソル位置の関数同定
+### フェーズ 2: カーソル位置の関数同定
 
 ユーザーがエディタ上でカーソルを置いている行（`cursorLine`）が含まれる `function_definition` ノードを特定します。
 
@@ -562,11 +601,10 @@ a = (BYTE)-hoge;
 - **行頭が空白の場合**: 行頭の1点ではなく行全体で判定するため、字下げされた関数定義や、フェーズ0で先頭の修飾子マクロ・`far` を空白化した関数定義（`GLOBAL void func(void)`、`far void func(void)`）も同定できます。
 - **シグネチャ位置判定**: 関数の戻り値型の開始行から、引数リストの閉じ括弧 `)`（`declaratorNode.endPosition.row`）までの行範囲内にカーソルがある場合のみ解析を実行します（関数ボディの中央などで実行された場合はスキップされます）。
 
----
 
-## フェーズ 3: 関数シグネチャの解析
+### フェーズ 3: 関数シグネチャの解析
 
-### 3.1 宣言子の解決 (`resolveDeclarator`)
+#### 3.1 宣言子の解決 (`resolveDeclarator`)
 
 関数名・引数名・変数名の取得はすべて `resolveDeclarator` に集約されており、`declarator` ノードを再帰的に深掘りして以下を返します。
 
@@ -580,11 +618,11 @@ a = (BYTE)-hoge;
 
 `pointer_declarator` / `array_declarator` / `parenthesized_declarator` / `function_declarator` のいずれの入れ子にも対応します（`parenthesized_declarator` は `declarator` フィールドを持たないため、`(` の次の子へ進みます）。
 
-### 3.2 関数名と戻り値の型
+#### 3.2 関数名と戻り値の型
 - `resolveDeclarator` で関数識別子と `pointerDepth` を取得し、戻り値型の末尾にポインタ深さ分のアスタリスクを付与します。
 - 関数の宣言型テキストから修飾子（`static`, `extern`, `inline`）を取り除き、クレンジングされた戻り値型（例: `int*`, `void`）を決定します。
 
-### 3.3 引数リスト (`params`)
+#### 3.3 引数リスト (`params`)
 
 **引数リストの取得元**: `resolveDeclarator` が返す `ownerFunctionDeclarator`（＝関数名の識別子に最も近い `function_declarator`）の `parameters` フィールドを使用します。
 
@@ -602,13 +640,12 @@ void (*get_handler(int id))(char *msg)
 - **ポインタ判定**: `pointerDepth > 0`（`int *p`）または `arrayDepth > 0`（`int arr[]`）の場合に **`isPointer = true`**（＝デレファレンスによる書き込みが可能）として記録します。
 - **型名の表示**: 型名の末尾にポインタ深さ分のアスタリスクを付与します（配列はポインタ1段として扱います）。例: `int *p` → `int*`、`int **pp` → `int**`、`int arr[]` → `int*`。
 
----
 
-## フェーズ 4: 関数ボディのトラバース解析
+### フェーズ 4: 関数ボディのトラバース解析
 
 関数ボディ（`compound_statement`）内の AST ノードを再帰走査 (`walk`) し、変数の宣言・参照・書き込みを判定します。
 
-### 走査は2パス構成
+#### 走査は2パス構成
 
 読み書きの分類（パス2）は、**ローカル変数と呼び出し関数の一覧が確定していること**を前提とします。1周で行うと識別子の出現順によって分類結果が変わってしまうため、走査を2周に分けています。
 
@@ -631,21 +668,20 @@ void work(void) {
 }
 ```
 
-### 4.1 ローカル変数の抽出（パス1）
+#### 4.1 ローカル変数の抽出（パス1）
 `declaration` ノードから変数名と型を取り出し、`localVars` に登録します（多重ポインタや配列宣言に対応）。処理はフェーズ1と共通の `collectDeclaredVars` を使用します。
 
-### 4.2 関数呼び出しの抽出（パス1）
+#### 4.2 関数呼び出しの抽出（パス1）
 `call_expression` の関数識別子を `calledFunctions` に登録します（関数ポインタ経由の呼び出しを除く）。
 
 収集後、ローカル変数や引数として宣言されている名前（＝関数ポインタ変数の呼び出し）を除外します。
 
----
 
-### 4.3 代入式および更新式の書き込み判定 (`checkLhsWrites`)
+#### 4.3 代入式および更新式の書き込み判定 (`checkLhsWrites`)
 
 代入式（`assignment_expression`）の左辺（`left`）およびインクリメント/デクリメント式（`update_expression`）の対象（`argument`）に対して、`resolveLhsVariable` を実行します。
 
-#### `resolveLhsVariable` による構文木の解読およびアクセスパス正規化
+##### `resolveLhsVariable` による構文木の解読およびアクセスパス正規化
 左辺またはアクセス式の構文木を深掘りし、根元の識別子名（`rootName`）、**アクセスパス文字列（`path`）**、およびデレファレンス（書き込みアクセス）の有無（`isPointerWrite`）を解決します。
 
 アクセスパス（`path`）は、**配列の添字内容を空の `[]` に正規化**した文字列として構築されます。
@@ -657,7 +693,7 @@ void work(void) {
 | `var_ptr->sub.member = 30;` | `var_ptr` | `var_ptr->sub.member` | `true` (アロー演算子) |
 | `global_val = 10;` | `global_val` | `global_val` | `false` |
 
-#### 書き込み先の分類ロジック (`checkLhsWrites`)
+##### 書き込み先の分類ロジック (`checkLhsWrites`)
 
 ```mermaid
 flowchart TD
@@ -670,22 +706,21 @@ flowchart TD
     F -->|Yes| H["無視 (ローカル変数への書き込み)"]
 ```
 
----
 
-### 4.4 識別子 (identifier) の参照・読み取り判定
+#### 4.4 識別子 (identifier) の参照・読み取り判定
 
 AST 内で `identifier` ノードが出現した際、それが読み取り（入力）として使われているかを判定します。
 
-#### スキップ条件
+##### スキップ条件
 以下の場合、単なる名前の宣言や構造体メンバ指定であるためスキップします。
 - `field_expression` の右側（`obj.member` の `member`）
 - `parameter_declaration`, `declaration`, `function_declarator` の名称部分
 
-#### LHS（書き込み先）判定 (`isLhsNode`)
+##### LHS（書き込み先）判定 (`isLhsNode`)
 ノードが単なる代入の左辺 (`left`) である場合は読み取り判定から除外します。
 - **例外（複合代入・インクリメント）**: `+=`, `-=` などの複合代入演算子、または `++`, `--` の更新式に位置する場合は `isLhsNode = false` とし、**「読み取り（入力）」と「書き込み（出力）」の両方にカウント**します。
 
-#### 分類適用
+##### 分類適用
 1. **ポインタ引数**: `isLhsNode` でなければ `pointerReads` に追加。
 2. **グローバル変数**: 下表のいずれにも該当せず、`isLhsNode` でなければ `globalVarReads` に追加。
 
@@ -710,9 +745,8 @@ void work(void) {
 
 この場合 `helper` は `calledFunctions` に登録されないため、除外しないとグローバル変数の読み取り（入力変数）として誤分類されます。
 
----
 
-## フェーズ 5: 解析結果の統合と最終分類
+### フェーズ 5: 解析結果の統合と最終分類
 
 収集されたデータをもとに、各出力カテゴリを作成します。
 
@@ -738,7 +772,9 @@ flowchart LR
     end
 ```
 
-### 5.1 マクロ分類 (`shouldClassifyAsMacro`)
+#### 5.1 マクロ分類 (`shouldClassifyAsMacro`)
+
+> TODO(要確認): 旧仕様書の記述のまま移した。現在のソースには `shouldClassifyAsMacro` と `classifyAllUppercaseAsMacros` が見つからない（`classifyAllUppercaseAsMacros` は v3.5.0 で削除）。マクロの判定の現在の規則は [spec.md の「マクロかどうかの判定」](spec.md#マクロかどうかの判定)（名前の大小は使わない）を正とする。
 
 マクロかどうかは、フェーズ1で収集した定義に基づいて判定します。判定の優先順位は次の通りです。
 
@@ -767,11 +803,10 @@ flowchart TD
 
 システムインクルード（`#include <...>`）は探索対象外のため、標準ライブラリのマクロは推定による判定になります。
 
----
 
-## 判定ロジックの具体例
+### 判定ロジックの具体例
 
-### 例 1: 複合代入とポインタのインクリメント
+#### 例 1: 複合代入とポインタのインクリメント
 
 ```c
 int global_val = 0;
@@ -782,7 +817,7 @@ void process_data(int *ptr) {
 }
 ```
 
-### 例 2: グローバル構造体配列への代入
+#### 例 2: グローバル構造体配列への代入
 
 ```c
 struct SensorData { int val; };
@@ -797,9 +832,8 @@ void update_sensor() {
 3. `sensors` は引数リストに存在しないため `else` ブロック（グローバル変数判定）へ到達。
 4. ローカル変数ではないため、`globalVarWrites` に追加され、**`outputs`（グローバル変数への書き込み）として正しく検出**。
 
----
 
-## Webview への描画
+### Webview への描画
 
 解析結果の HTML 生成は `src/webviewHtml.ts`（構造）と `src/webviewStyles.ts`（スタイル）に分離されており、いずれも VS Code API に依存しないためヘッドレスでテストできます。`src/webview.ts` はパネル管理とエディタ操作（ハイライト描画・クリップボード）に専念します。
 
@@ -810,11 +844,11 @@ void update_sensor() {
 | `webview.ts` | パネルのライフサイクル、ハイライト描画、クリップボード委譲 |
 | `highlight.ts` | ハイライト検索用の正規表現生成 |
 
-### ハイライト対象の判定
+#### ハイライト対象の判定
 
 エディタ上に実体を持たない項目（`戻り値 (return)`）は、`VariableInfo.highlightable` に `false` が設定されます。HTML には `data-highlightable="false"` として出力され、クリックしてもハイライト要求を送信しません。表示文字列との比較ではなく**データとして判定**しています。
 
-### アクセスパスのハイライト (`buildHighlightRegex`)
+#### アクセスパスのハイライト (`buildHighlightRegex`)
 
 アクセスパス中の `[]` は、コード上の実際の添字にマッチする正規表現へ変換されます。
 
@@ -834,13 +868,12 @@ void update_sensor() {
 
 なお、配列全体を渡す参照（`memcpy(dst, hoge, n)`、`sizeof(hoge)`）は添字を伴わないためマッチしません。
 
-### コンテンツセキュリティポリシー
+#### コンテンツセキュリティポリシー
 
 Webview には `default-src 'none'` を基本とする CSP を設定し、`<style>` と `<script>` には描画のたびに生成する nonce を付与しています。変数名・型名は全て HTML エスケープ済みですが、多層防御として設定しています。
 
----
 
-## 除外ブラックリスト (`EXCLUDE_LIST`)
+### 除外ブラックリスト (`EXCLUDE_LIST`)
 
 グローバル変数の自動判定時、以下の C 言語標準予約語やシステムマクロは自動的に除外されます。
 - `NULL`, `TRUE`, `FALSE`, `true`, `false`

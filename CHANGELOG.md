@@ -2,6 +2,13 @@
 
 本プロジェクト（C Function Analyzer）のすべての変更は、このファイルに記録されます。
 
+## [3.9.3] - 2026-11-15
+### 変更
+* ドキュメントを、全プロジェクト共通のドキュメント標準に沿って整備しました。README を入口として短くし、仕様（`docs/spec.md`）、使用方法（`docs/usage.md`）、設計（`docs/architecture.md`）、開発（`docs/development.md`）、設定（`docs/configuration.md`）、設計判断記録（`docs/adr/`）に分けました。`CLAUDE.md` に、ドキュメントの更新ルールを加えました。
+* 解析の技術仕様書（`docs/analysis_spec.md`）は、`docs/architecture.md` の「解析処理の詳細」に移しました。現在のソースと食い違う記述（削除済みの `classifyAllUppercaseAsMacros`、`includeResolver.ts`）には注記を付けました。
+### 補足
+* 拡張機能の動作に変更はありません。
+
 ## [3.9.2] - 2026-10-20
 ### 修正
 * `far` 修飾子が付いた関数定義（例: `far void func(void)`、`BYTE far func(void)`）の宣言部で実行しても、「関数が定義されている場所の「関数名がある行（宣言部）」にカーソルを置いて実行してください。」と表示され、解析できない不具合を修正しました。
