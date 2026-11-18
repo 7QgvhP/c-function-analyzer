@@ -42,4 +42,4 @@ code --install-extension c-function-analyzer-X.Y.Z.vsix
 
 ## ライセンス
 
-TODO(要確認): LICENSE ファイルがなく、`package.json` にも `license` の指定がない。
+ライセンスは定めていない（LICENSE ファイルはない）。

@@ -16,7 +16,7 @@ npm run compile    # dist/extension.js を生成（WASM のコピーと esbuild�
 npm run watch      # 変更を監視して自動ビルド
 ```
 
-vsix は GitHub Actions が作る（下記「リリース手順」）。手元で作る場合は `npx --yes @vscode/vsce package`（未検証。ワークフローと同じコマンド）。
+vsix は GitHub Actions が作る（下記「リリース手順」）。手元で作る場合は `npx --yes @vscode/vsce package`（ワークフローと同じコマンド）。
 
 ## テスト
 
@@ -24,8 +24,6 @@ vsix は GitHub Actions が作る（下記「リリース手順」）。手元�
 npm test           # 型チェック + テストのビルド（dist-test/）+ node:test
 npm run typecheck  # 型チェックのみ
 ```
-
-2026-11-15 の確認時は 493 件すべて成功した。
 
 - テストは Node 標準の `node:test` で書いており、追加のパッケージは不要。
 - 解析ロジックは VS Code API に依存しない構成のため、拡張機能を起動せずに検証できる。
