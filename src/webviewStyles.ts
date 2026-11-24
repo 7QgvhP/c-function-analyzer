@@ -388,6 +388,19 @@ export const WEBVIEW_STYLES = `
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+            cursor: text;
+        }
+
+        /* コメントをドラッグで選択している間は、選択の範囲をそのコメント1つに閉じ込める。
+           ほかの要素を選択できなくすることで、ドラッグが行や分類の外へはみ出しても
+           名前・見出し・ほかの行のコメントが選択に含まれないようにする。 */
+        body.is-selecting-comment,
+        body.is-selecting-comment * {
+            user-select: none;
+        }
+
+        body.is-selecting-comment .variable-comment.is-selection-target {
+            user-select: text;
         }
 
         .variable-name {

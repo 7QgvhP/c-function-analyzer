@@ -537,7 +537,9 @@ ${macroFunctions.length > 0 ? renderSection('macro-fn', 'マクロ関数', macro
             const areaRect = layoutArea.getBoundingClientRect();
             const commentRect = sample.getBoundingClientRect();
             resizer.style.display = 'block';
-            resizer.style.left = (commentRect.left - areaRect.left - 5) + 'px';
+            // 区切り線の当たり判定は、コメント欄の左隣の余白に収める。
+            // コメント欄に重なると、1文字目をドラッグで選択しようとしたときに区切り線を掴んでしまうため。
+            resizer.style.left = (commentRect.left - areaRect.left - resizer.offsetWidth) + 'px';
         }
 
         if (resizer) {
@@ -562,6 +564,25 @@ ${macroFunctions.length > 0 ? renderSection('macro-fn', 'マクロ関数', macro
                 document.addEventListener('mouseup', onUp);
             });
         }
+
+        // コメントのドラッグによる選択。
+        // 押した位置のコメントだけを選択できる状態にし、ほかの要素が選択に含まれないようにする。
+        // 状態は次にマウスを押すまで保つ（離した時点で戻すと、選択範囲が広がることがあるため）。
+        document.addEventListener('mousedown', event => {
+            document.body.classList.remove('is-selecting-comment');
+            document.querySelectorAll('.variable-comment.is-selection-target').forEach(el => {
+                el.classList.remove('is-selection-target');
+            });
+            if (event.button !== 0 || !(event.target instanceof Element)) {
+                return;
+            }
+            const comment = event.target.closest('.variable-comment');
+            if (!comment) {
+                return;
+            }
+            comment.classList.add('is-selection-target');
+            document.body.classList.add('is-selecting-comment');
+        });
 
         // 表示幅が変わると許容できる最大幅も変わるため、その都度収め直す
         applyCommentWidth(currentCommentWidth());

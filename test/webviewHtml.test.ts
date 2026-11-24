@@ -768,6 +768,22 @@ describe('renderAnalysisHtml: コメント欄の幅', () => {
         const html = renderAnalysisHtml(makeResult(), 'N');
         assert.ok(html.includes("command: 'setCommentWidth'"), '幅の通知を送ること');
     });
+
+    test('区切り線はコメント欄に重ならないよう、左隣の余白に配置する', () => {
+        const html = renderAnalysisHtml(makeResult(), 'N');
+        assert.ok(html.includes('commentRect.left - areaRect.left - resizer.offsetWidth'), '区切り線の幅だけ左へずらすこと');
+    });
+
+    test('コメントのドラッグ選択は、押した位置のコメント1つに範囲を閉じ込める (#31)', () => {
+        const html = renderAnalysisHtml(makeResult(), 'N');
+        assert.ok(html.includes("closest('.variable-comment')"), '押した位置のコメントを特定すること');
+        assert.ok(html.includes("classList.add('is-selecting-comment')"), '選択中の状態にすること');
+        const styleStart = html.indexOf('<style nonce=');
+        const styleEnd = html.indexOf('</style>');
+        const insideStyle = html.substring(styleStart, styleEnd);
+        assert.ok(/body\.is-selecting-comment \*\s*\{\s*user-select: none;/.test(insideStyle), 'ほかの要素は選択できなくすること');
+        assert.ok(/\.variable-comment\.is-selection-target\s*\{\s*user-select: text;/.test(insideStyle), '対象のコメントだけ選択できること');
+    });
 });
 
 describe('renderAnalysisHtml: 定義ジャンプの診断 (v3.2.0)', () => {
