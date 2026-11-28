@@ -136,6 +136,13 @@ function hasAmbiguousDefinition(result: AnalysisResult): boolean {
 }
 
 /**
+ * コメントがない項目に置く、コメント欄と同じ幅の空欄です。
+ * 名前が区切り線より右（コメント欄の位置）へはみ出さないよう、幅だけを確保します。
+ * コメント欄とは別のクラスにして、選択や区切り線の位置決めの対象から外します。
+ */
+const COMMENT_SPACER = '<span class="variable-comment-spacer"></span>';
+
+/**
  * 変数リストの各行のHTMLを生成します。
  *
  * @param vars 変数情報のリスト
@@ -160,7 +167,7 @@ function renderVariableList(vars: VariableInfo[]): string {
         const comment = v.comment ? escapeHtml(v.comment) : '';
         const commentColumn = comment
             ? `<span class="variable-comment" title="${comment}">${comment}</span>`
-            : '';
+            : COMMENT_SPACER;
         return `
                 <div class="variable-item" data-name="${name}" data-type="${type}" data-value="${value}" data-comment="${comment}" data-highlightable="${highlightable}"${renderDefinitionAttrs(v.definition)}>
                     <div class="variable-row">
@@ -203,7 +210,7 @@ function renderCalledFunctions(funcs: FunctionInfo[]): string {
         const comment = f.comment ? escapeHtml(f.comment) : '';
         const commentColumn = comment
             ? `<span class="variable-comment" title="${comment}">${comment}</span>`
-            : '';
+            : COMMENT_SPACER;
         return `
                 <div class="variable-item" data-name="${cleanName}" data-type="${type}" data-value="${value}" data-comment="${comment}" data-highlightable="true"${renderDefinitionAttrs(f.definition)}>
                     <div class="variable-row">

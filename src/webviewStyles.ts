@@ -391,6 +391,17 @@ export const WEBVIEW_STYLES = `
             cursor: text;
         }
 
+        /* コメントがない項目の空欄。コメント欄と同じ幅を確保し、名前が区切り線より右へはみ出さないようにする。
+           画面内にコメントが1つもない場合は区切り線も出ないため、幅を確保せず名前に譲る。 */
+        .variable-comment-spacer {
+            flex: 0 0 var(--comment-width, 260px);
+            margin-left: auto;
+        }
+
+        body:not(:has(.variable-comment)) .variable-comment-spacer {
+            display: none;
+        }
+
         /* コメントをドラッグで選択している間は、選択の範囲をそのコメント1つに閉じ込める。
            ほかの要素を選択できなくすることで、ドラッグが行や分類の外へはみ出しても
            名前・見出し・ほかの行のコメントが選択に含まれないようにする。 */

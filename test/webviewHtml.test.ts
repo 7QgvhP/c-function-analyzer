@@ -648,6 +648,26 @@ describe('renderAnalysisHtml: コメント欄', () => {
         assert.ok(html.includes('data-comment=""'), 'データ属性は空で出力されること');
     });
 
+    test('コメントがない項目には、コメント欄と同じ幅の空欄を置く', () => {
+        const html = renderAnalysisHtml(makeResult({
+            inputs: [
+                { name: 'channel', type: 'U8', details: '', comment: 'チャンネル番号' },
+                { name: 'mode', type: 'U8', details: '' }
+            ],
+            calledFunctions: [{ name: 'calc', type: 'int' }]
+        }), 'N');
+        const spacers = html.match(/<span class="variable-comment-spacer"><\/span>/g) ?? [];
+        assert.strictEqual(spacers.length, 2, '変数と呼び出し関数の、コメントがない項目に空欄が出ること');
+        assert.ok(
+            /\.variable-comment-spacer\s*\{\s*flex: 0 0 var\(--comment-width, 260px\);/.test(html),
+            '空欄がコメント欄と同じ幅を確保すること'
+        );
+        assert.ok(
+            html.includes('body:not(:has(.variable-comment)) .variable-comment-spacer'),
+            'コメントが1つもない場合は空欄の幅を確保しないこと'
+        );
+    });
+
     test('コメントをHTMLエスケープする', () => {
         const html = renderAnalysisHtml(makeResult({
             inputs: [{ name: 'v', type: 'int', details: '', comment: '<img src=x>' }]
